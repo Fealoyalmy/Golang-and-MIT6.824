@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="341facf0-0dd5-43a5-9a58-d87cc08c3bdc" name="NUAA_ubuntu01">
+        <fileTransfer rootFolder="/home/ubuntu" accessType="SFTP" host="10.2.0.183" port="22" sshConfigId="5830b445-2ffc-4e6f-8f21-01eb9e4d7886" sshConfig="ubuntu@10.2.0.183:22 key" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
