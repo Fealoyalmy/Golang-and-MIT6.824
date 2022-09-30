@@ -99,7 +99,31 @@ func f1(num1, num2 int) int {
 	return res
 }
 
+type AA struct {
+	a int
+	b bool
+}
+
+type BB struct {
+	a int
+	b bool
+}
+
+func (a *AA) af(b *BB) {
+	a.a = 1
+	a.b = true
+	b.a = a.a
+	b.b = a.b
+}
+
 func main() { // 必须有main函数
+	aa := AA{}
+	bb := BB{}
+	fmt.Println(aa, bb)
+	aa.af(&bb)
+	fmt.Println(aa.a, aa.b)
+	fmt.Println(bb.a, bb.b)
+
 	//var r = f1(1, 2)
 	//fmt.Print(r)
 	//test()
@@ -119,8 +143,8 @@ func main() { // 必须有main函数
 	//	fmt.Println(w)
 	//}
 
-	arr := [3]int{1, 2, 3}
-	for i, a := range arr {
-		fmt.Println(i, a)
-	}
+	//arr := [3]int{1, 2, 3}
+	//for i, a := range arr {
+	//	fmt.Println(i, a)
+	//}
 }

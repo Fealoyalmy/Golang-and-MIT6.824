@@ -33,13 +33,13 @@ func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 // Your code here -- RPC handlers for the worker to call.
 func (c *Coordinator) RPChandler(args *RPCArgs, reply *RPCReply) error {
 	// 为worker赋予递增的ID
-	fmt.Println("worker进入ID=", args.ID)
+	fmt.Printf("worker进入ID=%v\n", args.ID)
 	if args.ID == 0 {
 		fmt.Println("workerID++")
 		c.WorkerID++
 		args.ID = c.WorkerID
 	}
-	fmt.Println("c.WorkerID=", c.WorkerID)
+	fmt.Printf("c.WorkerID=%v\n", c.WorkerID)
 	// 判断worker的请求指令
 	if args.Command == "MapRequest" { // worker请求map任务
 		if c.MapCompleted == false { // 如果map()任务未全部完成
@@ -64,14 +64,15 @@ func (c *Coordinator) RPChandler(args *RPCArgs, reply *RPCReply) error {
 			fmt.Printf("中间键值对排序完成，reduce任务分块完成！\n")
 		}
 		reply.Status = false // 当前无task，告知worker
+		fmt.Printf("status=%v\n", reply.Status)
 	} else if args.Command == "ResultBack" { // worker回传map()处理结果到中间键值对
-		if c.MapCompleted == true { // 如果map任务尚未全部完成，则不予分配reduce任务
+		c.Intermediate = append(c.Intermediate, args.Data...) // 将worker缓存中的处理结果追加到中间键值对中
+		fmt.Printf("worker%v 完成%vmap() len(ikv)=%d: \n", args.ID, reply.Name, len(c.Intermediate))
+	} else if args.Command == "ReduceRequest" { // worker请求reduce任务
+		if c.MapCompleted == false { // 如果map任务尚未全部完成，则不予分配reduce任务
 			reply.Status = false
 			return nil
 		}
-		c.Intermediate = append(c.Intermediate, args.Data...) // 将worker缓存中的处理结果追加到中间键值对中
-		fmt.Printf("worker%v 完成map() 中间len(kv)=%d: \n", args.ID, len(c.Intermediate))
-	} else if args.Command == "ReduceRequest" { // worker请求reduce任务
 		for i, r := range c.ReduceCompleted { // 遍历reduce任务列表，分配尚未被处理的reduce任务
 			if r != 1 {
 				//reply.IRkb = c.Intermediate[i*len(c.Intermediate)/10 : (i+1)*len(c.Intermediate)/10]
@@ -82,7 +83,6 @@ func (c *Coordinator) RPChandler(args *RPCArgs, reply *RPCReply) error {
 			}
 		}
 	}
-
 	return nil
 }
 

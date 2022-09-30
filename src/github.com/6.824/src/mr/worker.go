@@ -26,9 +26,12 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	args := RPCArgs{}
 	reply := RPCReply{}
 
+	fmt.Println(args)
+	fmt.Println(reply)
 	for true {
 		args.Command = "MapRequest"
 		call("Coordinator.RPChandler", &args, &reply)
+		fmt.Printf("status=%v\n", reply.Status)
 		if reply.Status == true { // 收到task通知
 			args.Data = mapf(reply.Name, reply.Content) // 调用map()处理txt文件
 			args.Command = "ResultBack"
