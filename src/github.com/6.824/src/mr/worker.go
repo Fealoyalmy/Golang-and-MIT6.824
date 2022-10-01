@@ -33,13 +33,13 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	for true { // 反复请求任务
 		cmdCall("MapRequest", &args, &reply)
 		if args.ID == 0 { // 如果worker的ID仍未初始值0则赋值
-			args.ID = reply.Data
+			args.ID = reply.Data // 从reply.Data更新自身ID
 		}
 		if reply.Status == true { // 收到task通知
 			workerMap(&args, reply.Name, mapf)
-			cmdCall("ResultBack", &args, &reply)
 			fmt.Printf("worker%v map()完成 %v！ len(Data)= %d\n", args.ID, reply.Name, len(args.Data))
-		} else {
+			cmdCall("ResultBack", &args, &reply)
+		} else if reply.Status == false {
 			cmdCall("ReduceRequest", &args, &reply)
 			if reply.Status == true { // 收到task通知
 				workerReduce(reply, reducef) // 调用写文件函数，执行reduce()处理完毕后写入文件

@@ -7,8 +7,11 @@ import (
 import "net"
 import "os"
 import "fmt"
+import "sync"
 import "net/rpc"
 import "net/http"
+
+var rw sync.RWMutex
 
 type Coordinator struct {
 	// Your definitions here.
@@ -32,63 +35,86 @@ func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 // Your code here -- RPC handlers for the worker to call.
 func (c *Coordinator) RPChandler(args *RPCArgs, reply *RPCReply) error {
 	// 为worker赋予递增的ID
+	rw.Lock()
 	if args.ID == 0 {
 		c.WorkerID++
 		reply.Data = c.WorkerID
 		args.ID = reply.Data
+
 	}
+	rw.Unlock()
 	// 判断worker的请求指令
 	if args.Command == "MapRequest" { // worker请求map任务
+		rw.RLock()
 		if c.MapCompleted == false { // 如果map()任务未全部完成
+			rw.RUnlock()
+			rw.Lock()                         // c.FileStat读锁
 			for i, stat := range c.FileStat { // 遍历文件状态，找出未被处理的txt文件
 				if stat != 1 {
 					reply.Status = true        // 告诉worker当前有task
 					reply.Name = c.FileName[i] // 传递文件名给worker
-					//reply.Content = c.FileContent[i] // 传递文件文本给worker
+					//rw.Lock()
 					c.FileStat[i] = 1 // 标记已被分配的文件
 					fmt.Println(c.FileStat)
+					rw.Unlock()
 					fmt.Printf("分配%v 给worker%v!\n", reply.Name, args.ID)
+					//rw.RUnlock() // c.FileStat读锁//
 					return nil
 				}
 			}
+			rw.Unlock()           // c.FileStat读锁//
+			rw.Lock()             // c.MapCompleted写锁
 			c.MapCompleted = true // 置map()的所有任务状态为已完成
+			rw.Unlock()           // c.MapCompleted写锁//
 			fmt.Printf("所有map()完成！\n")
-			sort.Sort(ByKey(c.Intermediate))   // 若全部txt文件均已被处理则对中间键值对做排序，以便接下来分配reduce()
+			return nil
+		} else if c.MapCompleted == true {
+			rw.RUnlock()
+			rw.Lock()
+			sort.Sort(ByKey(c.Intermediate)) // 若全部txt文件均已被处理则对中间键值对做排序，以便接下来分配reduce()
+			rw.Unlock()
+			rw.Lock()
 			for i := 0; i < c.NumReduce; i++ { // 将中间键值对分成块reduce
 				c.ReduceTask = append(c.ReduceTask, c.Intermediate[i*len(c.Intermediate)/c.NumReduce:(i+1)*len(c.Intermediate)/c.NumReduce])
-				fmt.Println("len[i]=", len(c.ReduceTask[i]))
+				fmt.Printf("len[%d]=%d\n", i, len(c.ReduceTask[i]))
 			}
-
+			rw.Unlock()
 			fmt.Printf("中间键值对排序完成，reduce任务分块完成！\n")
+			reply.Status = false // 当前无task，告知worker
+			return nil
 		}
-		reply.Status = false // 当前无task，告知worker
 	} else if args.Command == "ResultBack" { // worker回传map()处理结果到中间键值对
+		rw.Lock()
 		c.Intermediate = append(c.Intermediate, args.Data...) // 将worker缓存中的处理结果追加到中间键值对中
-		fmt.Printf("worker%v 完成map() %v len(ikv)=%d: \n", args.ID, reply.Name, len(c.Intermediate))
+		fmt.Printf("worker%v 完成map() %v len(ikv)=%d\n", args.ID, reply.Name, len(c.Intermediate))
+		rw.Unlock()
 	} else if args.Command == "ReduceRequest" { // worker请求reduce任务
+		rw.RLock()
 		if c.MapCompleted == false { // 如果map任务尚未全部完成，则不予分配reduce任务
+			rw.RUnlock()
 			reply.Status = false
 			return nil
 		}
+		rw.RUnlock()
+		rw.Lock()
 		for i, r := range c.ReduceCompleted { // 遍历reduce任务列表，分配尚未被处理的reduce任务
 			if r != 1 {
 				reply.Status = true // 告诉worker当前有task
 				reply.OutNum = i
+				//rw.RLock()
 				reply.IRkv = c.ReduceTask[i] // 分配reduce任务给worker
-				c.ReduceCompleted[i] = 1     // 标记已分配的reduce任务
+				//rw.RUnlock()
+				//rw.Lock()
+				//fmt.Println("ReduceCompleted获取写锁")
+				c.ReduceCompleted[i] = 1 // 标记已分配的reduce任务
+				rw.Unlock()
+				//fmt.Println("ReduceCompleted释放写锁")
 				fmt.Printf("分配reduce()%v 给worker%v!\n", i, args.ID)
 				return nil
 			}
 		}
+		rw.Unlock()
 	}
-	return nil
-}
-
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
 	return nil
 }
 
@@ -112,10 +138,13 @@ func (c *Coordinator) Done() bool {
 	ret := false
 
 	// Your code here.
-	for _, i := range c.ReduceCompleted {
-		if i == 0 {
+	for i := 0; i < c.NumReduce; i++ {
+		rw.RLock()
+		if c.ReduceCompleted[i] == 0 {
+			rw.RUnlock()
 			return ret
 		}
+		rw.RUnlock()
 	}
 	fmt.Println(c.ReduceCompleted)
 	fmt.Println("所有reduce任务完成！")
