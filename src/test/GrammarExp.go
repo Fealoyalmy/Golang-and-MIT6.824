@@ -2,6 +2,8 @@ package main // 每个go项目必须有main包
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 ) // 导入fmt包（实现了格式化IO的函数）
 
 var A int       // 全局变量允许仅声明不使用
@@ -86,6 +88,8 @@ func test() {
 
 	//var f func(string) int
 
+	strconv.Itoa(a)  // int转string
+	strconv.Atoi(b1) // string转int
 }
 
 // 自定义函数
@@ -117,12 +121,12 @@ func (a *AA) af(b *BB) {
 }
 
 func main() { // 必须有main函数
-	aa := AA{}
-	bb := BB{}
-	fmt.Println(aa, bb)
-	aa.af(&bb)
-	fmt.Println(aa.a, aa.b)
-	fmt.Println(bb.a, bb.b)
+	//aa := AA{}
+	//bb := BB{}
+	//fmt.Println(aa, bb)
+	//aa.af(&bb)
+	//fmt.Println(aa.a, aa.b)
+	//fmt.Println(bb.a, bb.b)
 
 	//var r = f1(1, 2)
 	//fmt.Print(r)
@@ -147,4 +151,14 @@ func main() { // 必须有main函数
 	//for i, a := range arr {
 	//	fmt.Println(i, a)
 	//}
+
+	OutNum := 1
+
+	oname := "mr-out-" + strconv.Itoa(OutNum)
+	fmt.Println(strconv.Itoa(OutNum))
+	ofile, _ := os.Create(oname)
+	fmt.Println(oname)
+	//fmt.Fprintf(ofile, "abc")
+	ofile.Close()
+
 }

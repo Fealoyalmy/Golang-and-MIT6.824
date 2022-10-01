@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"io/ioutil"
 	"log"
 	"sort"
 )
@@ -33,23 +32,20 @@ func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 // Your code here -- RPC handlers for the worker to call.
 func (c *Coordinator) RPChandler(args *RPCArgs, reply *RPCReply) error {
 	// 为worker赋予递增的ID
-	fmt.Printf("worker进入ID=%v\n", args.ID)
 	if args.ID == 0 {
-		fmt.Println("workerID++")
 		c.WorkerID++
-		args.ID = c.WorkerID
+		reply.Data = c.WorkerID
+		args.ID = reply.Data
 	}
-	fmt.Printf("c.WorkerID=%v\n", c.WorkerID)
 	// 判断worker的请求指令
 	if args.Command == "MapRequest" { // worker请求map任务
 		if c.MapCompleted == false { // 如果map()任务未全部完成
 			for i, stat := range c.FileStat { // 遍历文件状态，找出未被处理的txt文件
 				if stat != 1 {
-					reply.Status = true // 告诉worker当前有task
-					//reply.Index = i
-					reply.Name = c.FileName[i]       // 传递文件名给worker
-					reply.Content = c.FileContent[i] // 传递文件文本给worker
-					c.FileStat[i] = 1                // 标记已被分配的文件
+					reply.Status = true        // 告诉worker当前有task
+					reply.Name = c.FileName[i] // 传递文件名给worker
+					//reply.Content = c.FileContent[i] // 传递文件文本给worker
+					c.FileStat[i] = 1 // 标记已被分配的文件
 					fmt.Println(c.FileStat)
 					fmt.Printf("分配%v 给worker%v!\n", reply.Name, args.ID)
 					return nil
@@ -60,14 +56,15 @@ func (c *Coordinator) RPChandler(args *RPCArgs, reply *RPCReply) error {
 			sort.Sort(ByKey(c.Intermediate))   // 若全部txt文件均已被处理则对中间键值对做排序，以便接下来分配reduce()
 			for i := 0; i < c.NumReduce; i++ { // 将中间键值对分成块reduce
 				c.ReduceTask = append(c.ReduceTask, c.Intermediate[i*len(c.Intermediate)/c.NumReduce:(i+1)*len(c.Intermediate)/c.NumReduce])
+				fmt.Println("len[i]=", len(c.ReduceTask[i]))
 			}
+
 			fmt.Printf("中间键值对排序完成，reduce任务分块完成！\n")
 		}
 		reply.Status = false // 当前无task，告知worker
-		fmt.Printf("status=%v\n", reply.Status)
 	} else if args.Command == "ResultBack" { // worker回传map()处理结果到中间键值对
 		c.Intermediate = append(c.Intermediate, args.Data...) // 将worker缓存中的处理结果追加到中间键值对中
-		fmt.Printf("worker%v 完成%vmap() len(ikv)=%d: \n", args.ID, reply.Name, len(c.Intermediate))
+		fmt.Printf("worker%v 完成map() %v len(ikv)=%d: \n", args.ID, reply.Name, len(c.Intermediate))
 	} else if args.Command == "ReduceRequest" { // worker请求reduce任务
 		if c.MapCompleted == false { // 如果map任务尚未全部完成，则不予分配reduce任务
 			reply.Status = false
@@ -75,11 +72,12 @@ func (c *Coordinator) RPChandler(args *RPCArgs, reply *RPCReply) error {
 		}
 		for i, r := range c.ReduceCompleted { // 遍历reduce任务列表，分配尚未被处理的reduce任务
 			if r != 1 {
-				//reply.IRkb = c.Intermediate[i*len(c.Intermediate)/10 : (i+1)*len(c.Intermediate)/10]
+				reply.Status = true // 告诉worker当前有task
 				reply.OutNum = i
-				reply.IRkb = c.ReduceTask[i] // 分配reduce任务给worker
+				reply.IRkv = c.ReduceTask[i] // 分配reduce任务给worker
 				c.ReduceCompleted[i] = 1     // 标记已分配的reduce任务
-				fmt.Printf("分配reduce() %v 给worker%v!\n", i, args.ID)
+				fmt.Printf("分配reduce()%v 给worker%v!\n", i, args.ID)
+				return nil
 			}
 		}
 	}
@@ -136,20 +134,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	for i := 0; i < nReduce; i++ { // 将中间键值对分成块reduce
 		c.ReduceCompleted = append(c.ReduceCompleted, 0) // reduce任务状态初始化
 	}
-	for _, filename := range files { // 遍历文件名读取每个txt文件
-		file, err := os.Open(filename) // 打开txt文件
-		if err != nil {                // 判断是否打开文件失败
-			log.Fatalf("cannot open %v", filename)
-		}
-		content, err := ioutil.ReadAll(file) // 读txt文件内容
-		if err != nil {
-			log.Fatalf("cannot read %v", filename)
-		}
-		// 遍历读取txt存入数组
+	for _, filename := range files { // 遍历每个txt文件文件名存数组并初始化文件状态
 		c.FileName = append(c.FileName, filename)
 		c.FileStat = append(c.FileStat, 0)
-		c.FileContent = append(c.FileContent, string(content))
-		file.Close()
 	}
 	fmt.Printf("txt文件读取完成!\n")
 	fmt.Println(c.FileStat)

@@ -25,18 +25,18 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 type RPCArgs struct {
-	ID      int
-	Command string
-	Data    []KeyValue
+	ID      int        // worker自身ID
+	Command string     // 请求命令
+	Data    []KeyValue // 回传给coordinator的数据数组
 }
 
 type RPCReply struct {
-	//Index   int
-	Name    string
-	Content string
-	IRkb    []KeyValue
-	OutNum  int
-	Status  bool
+	Name    string     // 被分配到要处理的文件名
+	Content string     // 要处理的文件内容
+	IRkv    []KeyValue // 要处理的键值对
+	OutNum  int        // 被分配到的reduce()任务号
+	Status  bool       // 当前任务状态
+	Data    int        // 用来获取全局ID更新worker自身初始ID
 }
 
 // Cook up a unique-ish UNIX-domain socket name in /var/tmp, for the coordinator.
