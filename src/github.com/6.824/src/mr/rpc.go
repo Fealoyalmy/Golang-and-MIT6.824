@@ -39,6 +39,13 @@ type RPCReply struct {
 	Data    int        // 用来获取全局ID更新worker自身初始ID
 }
 
+type CommandType int
+
+//const (
+//	MapRequest CommandType = iota
+//	ReduceRequest CommandType
+//)
+
 // Cook up a unique-ish UNIX-domain socket name in /var/tmp, for the coordinator.
 // Can't use the current directory since Athena AFS doesn't support UNIX-domain sockets.
 func coordinatorSock() string {
