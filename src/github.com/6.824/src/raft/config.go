@@ -101,7 +101,7 @@ func make_config(t *testing.T, n int, unreliable bool, snapshot bool) *config {
 	return cfg
 }
 
-// shut down a Raft server but save its persistent state.
+// shut down a Raft server but save its persistent role.
 func (cfg *config) crash1(i int) {
 	cfg.disconnect(i)
 	cfg.net.DeleteServer(i) // disable client connections to the server.
@@ -112,7 +112,7 @@ func (cfg *config) crash1(i int) {
 	// a fresh persister, in case old instance
 	// continues to update the Persister.
 	// but copy old persister's content so that we always
-	// pass Make() the last persisted state.
+	// pass Make() the last persisted role.
 	if cfg.saved[i] != nil {
 		cfg.saved[i] = cfg.saved[i].Copy()
 	}
@@ -177,7 +177,7 @@ func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 
 const SnapShotInterval = 10
 
-// periodically snapshot raft state
+// periodically snapshot raft role
 func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	lastApplied := 0
 	for m := range applyCh {
@@ -230,13 +230,11 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	}
 }
 
-//
 // start or re-start a Raft.
 // if one already exists, "kill" it first.
 // allocate new outgoing port file names, and a new
-// state persister, to isolate previous instance of
+// role persister, to isolate previous instance of
 // this server. since we cannot really kill it.
-//
 func (cfg *config) start1(i int, applier func(int, chan ApplyMsg)) {
 	cfg.crash1(i)
 
@@ -257,9 +255,9 @@ func (cfg *config) start1(i int, applier func(int, chan ApplyMsg)) {
 	cfg.mu.Lock()
 
 	// a fresh persister, so old instance doesn't overwrite
-	// new instance's persisted state.
+	// new instance's persisted role.
 	// but copy old persister's content so that we always
-	// pass Make() the last persisted state.
+	// pass Make() the last persisted role.
 	if cfg.saved[i] != nil {
 		cfg.saved[i] = cfg.saved[i].Copy()
 	} else {

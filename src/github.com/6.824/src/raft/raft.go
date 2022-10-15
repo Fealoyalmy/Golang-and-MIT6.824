@@ -21,6 +21,7 @@ import (
 	//	"bytes"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	//	"6.824/labgob"
 	"6.824/labrpc"
@@ -41,31 +42,40 @@ type ApplyMsg struct {
 	CommandIndex int
 
 	// For 2D:
-	//SnapshotValid bool
-	//Snapshot      []byte
-	//SnapshotTerm  int
-	//SnapshotIndex int
+	SnapshotValid bool
+	Snapshot      []byte
+	SnapshotTerm  int
+	SnapshotIndex int
 }
 
+// 定义日志条目
 type Log struct {
-	command string
-	term    int
+	command string // 日志命令
+	term    int    // 当前日志条目所在term
 }
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	mu        sync.Mutex          // Lock to protect shared access to this peer's role
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
+	persister *Persister          // Object to hold this peer's persisted role
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
+	// role a Raft server must maintain.
+	role int // 是2:leader/1:candidate/0:follower?
+
 	currentTerm int   // 当前服务器看到的最新term
 	votedFor    int   // 在当前term收到投票的候选人ID
 	log         []Log // log条目
+
+	commitIndex int // 已知被提交的最高log条目
+	lastApplied int // 应用到状态机的上一条log条目
+
+	nextIndex  int // 要送到服务器的下一个log index (each)
+	matchIndex int // 已知被备份到服务器的最新log index (each)
 }
 
 // return currentTerm and whether this server
@@ -73,17 +83,21 @@ type Raft struct {
 func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
-	// Your code here (2A).
-	term = rf.currentTerm
-	for p in peers{
 
+	// Your code here (2A).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	term = rf.currentTerm
+	if rf.role == 2 {
+		isleader = true
+	} else {
+		isleader = false
 	}
-	isleader = true
 
 	return term, isleader
 }
 
-// save Raft's persistent state to stable storage,
+// save Raft's persistent role to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 func (rf *Raft) persist() { //2C
@@ -97,9 +111,9 @@ func (rf *Raft) persist() { //2C
 	// rf.persister.SaveRaftState(data)
 }
 
-// restore previously persisted state.
+// restore previously persisted role.
 func (rf *Raft) readPersist(data []byte) { //2C
-	if data == nil || len(data) < 1 {      // bootstrap without any state?
+	if data == nil || len(data) < 1 { // bootstrap without any role?
 		return
 	}
 	// Your code here (2C).
@@ -148,6 +162,7 @@ type RequestVoteArgs struct {
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
+	mu          sync.Mutex
 	Term        int  // 系统当前term，用于候选人更新自己的term
 	VoteGranted bool // true表示候选人获得投票
 }
@@ -155,7 +170,15 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if args.Term < rf.currentTerm || rf.votedFor != 0 && rf.votedFor != args.CandidateID {
+		reply.VoteGranted = false
+	} else if (rf.votedFor == 0 || rf.votedFor == args.CandidateID) &&
+		rf.log[len(rf.log)-1].term <= args.LastLogTerm && len(rf.log)-1 <= args.LastLogIndex {
+		reply.VoteGranted = true
+	}
+	return
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -187,6 +210,57 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+// AppendEntries RPC 结构定义（实现心跳）
+type AppendEntriesArgs struct {
+	Term         int   // leader的term
+	LeaderID     int   // follower重定向client
+	PreLogIndex  int   // 新条目之前的日志条目index
+	PreLogTerm   int   // 新条目之前的日志条目term
+	Entries      []Log // 需要存储的log条目
+	LeaderCommit int   // leader的提交index
+}
+
+type AppendEntriesReply struct {
+	mu      sync.Mutex
+	Term    int  // 当前term（用于leader更新自己）
+	Success bool // 如果条目匹配先前logindex和termindex则返回true
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if args.Term < rf.currentTerm { // 如果leader.term < follower.term
+		reply.Success = false
+		return
+	}
+	if args.PreLogTerm != rf.log[args.PreLogIndex].term { // 如果leader的新log之前的条目term不是最新的
+		reply.Success = false
+		return
+	}
+	// 如果follower中的log与leader的不一致，则覆盖其不一致部分并append没有的部分
+	for i := 0; i < len(args.Entries); i++ {
+		if len(rf.log) <= len(args.Entries) && rf.log[i] != args.Entries[i] {
+			rf.log[i] = args.Entries[i]
+		} else {
+			rf.log = append(rf.log, args.Entries[i])
+		}
+	}
+	// 设置follower的最后提交logIndex = min(leader的提交logIndex,args.Entries[-1].Index)
+	if args.LeaderCommit > rf.commitIndex {
+		if args.LeaderCommit >= len(args.Entries)-1 {
+			rf.commitIndex = len(args.Entries) - 1
+		} else {
+			rf.commitIndex = args.LeaderCommit
+		}
+	}
+	return
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -240,18 +314,36 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 
+		//for {
+		time.Sleep(5 * time.Second) // 进入计时器，等待candidate/leader的RPC
+		rf.role = 1
+		//}
+
+		if rf.role == 1 { // 如果当前rf为candidate则准备请求投票
+			rvArgs := RequestVoteArgs{ // 初始化rpc参数
+				Term:         rf.currentTerm,
+				CandidateID:  rf.me,
+				LastLogIndex: rf.commitIndex,
+				LastLogTerm:  rf.log[1].term,
+			}
+			rvReply := RequestVoteReply{}
+			for i := 0; i < len(rf.peers); i++ { // 向每个服务器发送请求投票
+				if i != rf.me {
+					rf.sendRequestVote(i, &rvArgs, &rvReply)
+				}
+			}
+		}
 	}
 }
 
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
 // server's port is peers[me]. all the servers' peers[] arrays
-// have the same order. persister is a place for this server to
-// save its persistent state, and also initially holds the most
-// recent saved state, if any. applyCh is a channel on which the
-// tester or service expects Raft to send ApplyMsg messages.
-// Make() must return quickly, so it should start goroutines
-// for any long-running work.
+// have the same order.
+// persister is a place for this server to save its persistent role,
+// and also initially holds the most recent saved role, if any.
+// applyCh is a channel on which the tester or service expects Raft to send ApplyMsg messages.
+// Make() must return quickly, so it should start goroutines for any long-running work.
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
@@ -260,8 +352,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.role = 0 // 初始化为follower
+	rf.currentTerm = 1
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = rf.commitIndex + 1
+	rf.matchIndex = rf.commitIndex
 
-	// initialize from state persisted before a crash
+	// initialize from role persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
