@@ -18,13 +18,20 @@ package raft
 //
 
 import (
+	"fmt"
 	//	"bytes"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	//	"6.824/labgob"
 	"6.824/labrpc"
+)
+
+const (
+	hbTimeout = 200
+	rvTimeout = 300
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -66,7 +73,9 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// role a Raft server must maintain.
-	role int // 是2:leader/1:candidate/0:follower?
+	role      int // 是2:leader/1:candidate/0:follower?
+	getData   bool
+	heartBeat bool
 
 	currentTerm int   // 当前服务器看到的最新term
 	votedFor    int   // 在当前term收到投票的候选人ID
@@ -177,6 +186,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false
 		rf.currentTerm = args.Term
 		rf.role = 0
+		rf.getData = false
+		rf.heartBeat = true
 	} else if (rf.votedFor == 0 || rf.votedFor == args.CandidateID) &&
 		rf.log[len(rf.log)-1].term <= args.LastLogTerm && len(rf.log)-1 <= args.LastLogIndex {
 		reply.VoteGranted = true
@@ -246,6 +257,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	rf.currentTerm = args.Term
 	rf.role = 0
+	rf.getData = true
+	rf.heartBeat = true
 	if rf.log[len(rf.log)-1].term == args.PreLogTerm && len(rf.log)-1 == args.PreLogIndex {
 		reply.Success = true
 	} else {
@@ -316,19 +329,48 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func (rf *Raft) aeTicker() {
+	rf.mu.Lock()
+	rf.getData = false
+	rf.mu.Unlock()
+	time.Sleep(300 * time.Millisecond)
+	rf.mu.Lock()
+	if rf.getData == false {
+		rf.heartBeat = false
+	}
+	rf.mu.Unlock()
+}
+
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
+	log.Printf("Server%d 启动!\n", rf.me)
 	for rf.killed() == false {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-
+		fmt.Printf("Server%d 身份为%d\n", rf.me, rf.role)
 		rf.mu.Lock()
 		switch rf.role {
 		case 0: // 如果当前rf为follower，则等待RPC请求，否则因超时进入选举
 			//time.Sleep(100 * time.Millisecond) // 进入100ms计时器，等待candidate/leader的RPC
-			// TODO 如果收到RPC应该改变某些状态 (?是否可以用channel?WaitGroup???)
+			// TODO 如果收到RPC应该改变某些状态 (?是否可以用channel?WaitGroup???) (goroutine实现超时，使用time.Sleep与常量)
+			rf.mu.Lock()
+			for {
+				select {
+				// TODO 用time.Ticker()接收心跳中断
+				case <-time.After(hbTimeout * time.Millisecond):
+					rf.role = 1
+					break
+				}
+			}
+			fmt.Printf("follower%d 正在等待RPC\n", rf.me)
+			if rf.heartBeat == true {
+				go rf.aeTicker()
+			} else {
+				rf.role = 1
+			}
+			rf.mu.Unlock()
 		case 1: // 如果当前rf为candidate，则准备请求投票
 			rvArgs := RequestVoteArgs{ // 初始化rpc参数
 				Term:         rf.currentTerm,
@@ -359,6 +401,7 @@ func (rf *Raft) ticker() {
 					rf.sendAppendEntries(i, &aeArgs, &aeReply)
 				}
 			}
+			// TODO 推进 commitIndex 的代码将需要踢apply goroutine；使用条件可能是最简单的变量（Go 的 sync.Cond）
 		}
 		rf.mu.Unlock()
 		time.Sleep(100 * time.Millisecond) // 100ms
@@ -382,6 +425,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.role = 0 // 初始化为follower
+	rf.getData = false
+	rf.heartBeat = true
 	rf.currentTerm = 1
 	rf.commitIndex = 0
 	rf.lastApplied = 0

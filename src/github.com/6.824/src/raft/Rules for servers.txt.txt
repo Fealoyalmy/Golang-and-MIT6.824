@@ -23,3 +23,30 @@ Leaders:
   • 如果成功：为 follower 更新 nextIndex 和 matchIndex（§5.3） 
   • 如果 AppendEntries 由于日志不一致而失败：减少 nextIndex 并重试（§5.3） 
 • 如果存在 N 使得 N > commitIndex，则大多数 matchIndex[i] ≥ N，且 log[N].term == currentTerm：设置 commitIndex = N（§5.3，§5.4）
+
+
+PS:
+最好有一个长期运行的独立goroutine来使每个服务器在长时间未收到心跳时一起开始选举
+选举超时可以用goroutine定期检查（用time.Sleep和一个小常量）
+
+需要一个单独长时间运行的goroutin来发送在applyCh上按顺序提交的的日志条目（必须是单独的，在applyCh上发送会阻塞）
+
+推进 commitIndex 的代码将需要踢apply goroutine；使用条件可能是最简单的变量（Go 的 sync.Cond）
+RPC回复在同一个goroutine中处理（而不是通过channel回复）
+RPC处理程序应该忽略旧term的RPC
+
+
+
+
+
+140.82.112.4 github.com
+
+151.101.1.194 github.global.ssl.fastly.net
+151.101.65.194 github.global.ssl.fastly.net
+151.101.129.194 github.global.ssl.fastly.net
+151.101.193.194 github.global.ssl.fastly.net
+
+185.199.108.153 assets-cdn.github.com
+185.199.110.153 assets-cdn.github.com
+185.199.111.153 assets-cdn.github.com
+185.199.109.153 assets-cdn.github.com
