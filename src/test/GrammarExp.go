@@ -2,7 +2,6 @@ package main // 每个go项目必须有main包
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 ) // 导入fmt包（实现了格式化IO的函数）
 
@@ -152,13 +151,18 @@ func main() { // 必须有main函数
 	//	fmt.Println(i, a)
 	//}
 
-	OutNum := 1
+	//OutNum := 1
+	//
+	//oname := "mr-out-" + strconv.Itoa(OutNum)
+	//fmt.Println(strconv.Itoa(OutNum))
+	//ofile, _ := os.Create(oname)
+	//fmt.Println(oname)
+	////fmt.Fprintf(ofile, "abc")
+	//ofile.Close()
 
-	oname := "mr-out-" + strconv.Itoa(OutNum)
-	fmt.Println(strconv.Itoa(OutNum))
-	ofile, _ := os.Create(oname)
-	fmt.Println(oname)
-	//fmt.Fprintf(ofile, "abc")
-	ofile.Close()
+	a := 7 / 2
+	b := 13 / 2
+	c := 4.6 / 2
+	println(a, b, c)
 
 }

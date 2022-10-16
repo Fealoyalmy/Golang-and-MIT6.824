@@ -19,6 +19,8 @@ package raft
 
 import (
 	"fmt"
+	"math/rand"
+
 	//	"bytes"
 	"log"
 	"sync"
@@ -29,9 +31,11 @@ import (
 	"6.824/labrpc"
 )
 
-const (
+const ( // 单位ms
 	hbTimeout = 200
-	rvTimeout = 300
+	rvStart   = 150
+	rvEnd     = 300
+	//rvTimeout = 300
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -73,9 +77,8 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// role a Raft server must maintain.
-	role      int // 是2:leader/1:candidate/0:follower?
-	getData   bool
-	heartBeat bool
+	role int // 是2:leader/1:candidate/0:follower?
+	ch   chan string
 
 	currentTerm int   // 当前服务器看到的最新term
 	votedFor    int   // 在当前term收到投票的候选人ID
@@ -182,15 +185,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if args.Term < rf.currentTerm || rf.votedFor != 0 && rf.votedFor != args.CandidateID {
+	rf.ch <- "RequestVote"           // 接到RequestVote RPC 即管道通知重置timeout
+	if args.Term < rf.currentTerm || // rf自己的term比请求的候选人高
+		rf.votedFor != 0 && rf.votedFor != args.CandidateID { // rf已投过票且不是投给该候选人
 		reply.VoteGranted = false
-		rf.currentTerm = args.Term
-		rf.role = 0
-		rf.getData = false
-		rf.heartBeat = true
-	} else if (rf.votedFor == 0 || rf.votedFor == args.CandidateID) &&
-		rf.log[len(rf.log)-1].term <= args.LastLogTerm && len(rf.log)-1 <= args.LastLogIndex {
+	} else if (rf.votedFor == 0 || rf.votedFor == args.CandidateID) && // rf未投票或已投给该候选人
+		rf.log[len(rf.log)-1].term <= args.LastLogTerm && len(rf.log)-1 <= args.LastLogIndex { // 该候选人的log至少比rf新
 		reply.VoteGranted = true
+		rf.votedFor = args.CandidateID
+		rf.currentTerm = args.Term // 更新rf的term
+		rf.role = 0                // rf转变为follower
 	}
 	return
 }
@@ -257,8 +261,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	rf.currentTerm = args.Term
 	rf.role = 0
-	rf.getData = true
-	rf.heartBeat = true
+	rf.ch <- "AppendEntries"
 	if rf.log[len(rf.log)-1].term == args.PreLogTerm && len(rf.log)-1 == args.PreLogIndex {
 		reply.Success = true
 	} else {
@@ -329,18 +332,6 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
-func (rf *Raft) aeTicker() {
-	rf.mu.Lock()
-	rf.getData = false
-	rf.mu.Unlock()
-	time.Sleep(300 * time.Millisecond)
-	rf.mu.Lock()
-	if rf.getData == false {
-		rf.heartBeat = false
-	}
-	rf.mu.Unlock()
-}
-
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
@@ -350,43 +341,65 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 		fmt.Printf("Server%d 身份为%d\n", rf.me, rf.role)
-		rf.mu.Lock()
+
 		switch rf.role {
 		case 0: // 如果当前rf为follower，则等待RPC请求，否则因超时进入选举
-			//time.Sleep(100 * time.Millisecond) // 进入100ms计时器，等待candidate/leader的RPC
-			// TODO 如果收到RPC应该改变某些状态 (?是否可以用channel?WaitGroup???) (goroutine实现超时，使用time.Sleep与常量)
-			rf.mu.Lock()
+		Wait:
 			for {
 				select {
-				// TODO 用time.Ticker()接收心跳中断
-				case <-time.After(hbTimeout * time.Millisecond):
+				case msg := <-rf.ch: // 如收到RPC消息则打印日志（会持续循环等待RPC，直到除非超时）
+					fmt.Printf("收到消息：%v", msg)
+				case <-time.After(hbTimeout * time.Millisecond): // 未收到RPC消息，则超时转变为候选人
+					rf.mu.Lock()
 					rf.role = 1
-					break
+					rf.mu.Unlock()
+					break Wait // break外部的等待心跳for循环
 				}
 			}
-			fmt.Printf("follower%d 正在等待RPC\n", rf.me)
-			if rf.heartBeat == true {
-				go rf.aeTicker()
-			} else {
-				rf.role = 1
+		case 1: // 如果当前rf为candidate，则准备请求投票
+			rf.mu.Lock()
+			rvArgs := RequestVoteArgs{ // 初始化rpc参数
+				Term:         rf.currentTerm, // 候选人的term
+				CandidateID:  rf.me,          // 候选人的ID
+				LastLogIndex: rf.commitIndex, // 候选人的最后一个log条目号
+				LastLogTerm:  rf.log[1].term, // 候选人的最后一个log条目对应的term
 			}
 			rf.mu.Unlock()
-		case 1: // 如果当前rf为candidate，则准备请求投票
-			rvArgs := RequestVoteArgs{ // 初始化rpc参数
-				Term:         rf.currentTerm,
-				CandidateID:  rf.me,
-				LastLogIndex: rf.commitIndex,
-				LastLogTerm:  rf.log[1].term,
-			}
 			rvReply := RequestVoteReply{}
-			for i := 0; i < len(rf.peers); i++ { // 向每个服务器发送请求投票
-				if i != rf.me {
-					rf.sendRequestVote(i, &rvArgs, &rvReply)
+		Vote:
+			for {
+				rf.mu.Lock()
+				voteNum := 0 // 候选人获得的票数
+				rf.currentTerm++
+				rf.votedFor = rf.me // 候选人投票给自己
+				voteNum++
+				for i := 0; i < len(rf.peers); i++ { // 向每个服务器发送请求投票
+					if i != rf.me {
+						rf.sendRequestVote(i, &rvArgs, &rvReply)
+						if rvReply.VoteGranted { // 如果收到投票
+							voteNum++
+						}
+						if voteNum > len(rf.peers)/2 { // 如果收到的票数超过总数的一半则成为leader
+							rf.role = 2
+							rf.ch <- "becomeLeader"
+							break
+						}
+					}
+				}
+				rf.mu.Unlock()
+				// 选举超时的问题
+				rand.Seed(time.Now().UnixNano())                // 生成随机种子
+				rvTimeout := rand.Intn(rvEnd-rvStart) + rvStart // 随机设置选举超时时间
+				select {                                        // TODO 此处选举将超时可能存在问题，应该在发出投票请求前就开始计时
+				case msg := <-rf.ch: // 如果成功当选或收到appendEntries RPC 则跳出选举状态
+					fmt.Printf("收到消息：%v", msg)
+					break Vote // break外部的选举for循环
+				case <-time.After(time.Duration(rvTimeout) * time.Millisecond): // 否则因选举超时而重新开始选举
+					continue
 				}
 			}
-			// TODO (?需要考虑选举超时的问题，如重置计时器，方法考虑如上???)
-			time.Sleep(1000 * time.Millisecond) // 1s
 		case 2: // 如果当前rf为leader，则定期发送心跳给所有服务器
+			rf.mu.Lock()
 			aeArgs := AppendEntriesArgs{
 				Term:         rf.currentTerm,             // leader的term
 				LeaderID:     rf.me,                      // follower重定向client
@@ -402,9 +415,9 @@ func (rf *Raft) ticker() {
 				}
 			}
 			// TODO 推进 commitIndex 的代码将需要踢apply goroutine；使用条件可能是最简单的变量（Go 的 sync.Cond）
+			rf.mu.Unlock()
+			time.Sleep(100 * time.Millisecond) // 间隔100ms发送一次心跳
 		}
-		rf.mu.Unlock()
-		time.Sleep(100 * time.Millisecond) // 100ms
 	}
 }
 
@@ -424,9 +437,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-	rf.role = 0 // 初始化为follower
-	rf.getData = false
-	rf.heartBeat = true
+	rf.role = 0               // 初始化为follower
+	rf.ch = make(chan string) // 创建通道
 	rf.currentTerm = 1
 	rf.commitIndex = 0
 	rf.lastApplied = 0
