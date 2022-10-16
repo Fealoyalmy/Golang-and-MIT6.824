@@ -11,6 +11,7 @@ import "sync"
 import "net/rpc"
 import "net/http"
 
+var wg sync.WaitGroup
 var rw sync.RWMutex
 
 type Coordinator struct {

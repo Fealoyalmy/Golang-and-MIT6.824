@@ -50,6 +50,7 @@ type ApplyMsg struct {
 
 // 定义日志条目
 type Log struct {
+	index   int    // 索引
 	command string // 日志命令
 	term    int    // 当前日志条目所在term
 }
@@ -174,6 +175,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	if args.Term < rf.currentTerm || rf.votedFor != 0 && rf.votedFor != args.CandidateID {
 		reply.VoteGranted = false
+		rf.currentTerm = args.Term
+		rf.role = 0
 	} else if (rf.votedFor == 0 || rf.votedFor == args.CandidateID) &&
 		rf.log[len(rf.log)-1].term <= args.LastLogTerm && len(rf.log)-1 <= args.LastLogIndex {
 		reply.VoteGranted = true
@@ -229,6 +232,7 @@ type AppendEntriesReply struct {
 	Success bool // 如果条目匹配先前logindex和termindex则返回true
 }
 
+// 服务器接收来自leader的AppendEntries RPC
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -240,12 +244,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	}
-	// 如果follower中的log与leader的不一致，则覆盖其不一致部分并append没有的部分
-	for i := 0; i < len(args.Entries); i++ {
-		if len(rf.log) <= len(args.Entries) && rf.log[i] != args.Entries[i] {
-			rf.log[i] = args.Entries[i]
-		} else {
-			rf.log = append(rf.log, args.Entries[i])
+	rf.currentTerm = args.Term
+	rf.role = 0
+	if rf.log[len(rf.log)-1].term == args.PreLogTerm && len(rf.log)-1 == args.PreLogIndex {
+		reply.Success = true
+	} else {
+		// 如果follower中的log与leader的不一致，则覆盖其不一致部分并append没有的部分
+		for i := 0; i < len(args.Entries); i++ {
+			if len(rf.log) <= len(args.Entries) && rf.log[i] != args.Entries[i] {
+				rf.log[i] = args.Entries[i]
+			} else {
+				rf.log = append(rf.log, args.Entries[i])
+			}
 		}
 	}
 	// 设置follower的最后提交logIndex = min(leader的提交logIndex,args.Entries[-1].Index)
@@ -314,12 +324,12 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 
-		//for {
-		time.Sleep(5 * time.Second) // 进入计时器，等待candidate/leader的RPC
-		rf.role = 1
-		//}
-
-		if rf.role == 1 { // 如果当前rf为candidate则准备请求投票
+		rf.mu.Lock()
+		switch rf.role {
+		case 0: // 如果当前rf为follower，则等待RPC请求，否则因超时进入选举
+			//time.Sleep(100 * time.Millisecond) // 进入100ms计时器，等待candidate/leader的RPC
+			// TODO 如果收到RPC应该改变某些状态 (?是否可以用channel?WaitGroup???)
+		case 1: // 如果当前rf为candidate，则准备请求投票
 			rvArgs := RequestVoteArgs{ // 初始化rpc参数
 				Term:         rf.currentTerm,
 				CandidateID:  rf.me,
@@ -332,7 +342,26 @@ func (rf *Raft) ticker() {
 					rf.sendRequestVote(i, &rvArgs, &rvReply)
 				}
 			}
+			// TODO (?需要考虑选举超时的问题，如重置计时器，方法考虑如上???)
+			time.Sleep(1000 * time.Millisecond) // 1s
+		case 2: // 如果当前rf为leader，则定期发送心跳给所有服务器
+			aeArgs := AppendEntriesArgs{
+				Term:         rf.currentTerm,             // leader的term
+				LeaderID:     rf.me,                      // follower重定向client
+				PreLogIndex:  len(rf.log) - 1,            // 新条目之前的日志条目index
+				PreLogTerm:   rf.log[len(rf.log)-1].term, // 新条目之前的日志条目term
+				Entries:      []Log{},                    // 需要存储的log条目
+				LeaderCommit: rf.commitIndex,             // leader的提交index
+			}
+			aeReply := AppendEntriesReply{}
+			for i := 0; i < len(rf.peers); i++ { // 向每个服务器发送心跳
+				if i != rf.me {
+					rf.sendAppendEntries(i, &aeArgs, &aeReply)
+				}
+			}
 		}
+		rf.mu.Unlock()
+		time.Sleep(100 * time.Millisecond) // 100ms
 	}
 }
 
