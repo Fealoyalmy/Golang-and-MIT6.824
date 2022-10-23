@@ -38,7 +38,7 @@ RPC处理程序应该忽略旧term的RPC
 
 
 
-
+******
 140.82.112.4 github.com
 
 151.101.1.194 github.global.ssl.fastly.net
@@ -50,3 +50,28 @@ RPC处理程序应该忽略旧term的RPC
 185.199.110.153 assets-cdn.github.com
 185.199.111.153 assets-cdn.github.com
 185.199.109.153 assets-cdn.github.com
+******
+
+
+TODO:
+10.21:
+(1)如果领导者的任期（包括在其 RPC 中）至少与候选人的当前任期一样大，那么候选人将领导者识别为合法并返回跟随者状态。如果 RPC 中的任期小于候选人的当前任期，则候选人拒绝 RPC 并继续处于候选人状态。
+(2)在大多数情况下，只有一个服务器会超时；它赢得了选举，并在任何其他服务器超时之前发出心跳???
+(3)Raft 通过无限期重试来处理这些失败；如果崩溃的服务器重新启动，那么 RPC 将成功完成。如果服务器在完成 RPC 之后但在响应之前崩溃，那么它会在重新启动后再次收到相同的 RPC。
+
+10.22:
+(1)2A ReElection时，当一个Server重新连接后，在心跳超时转变为候选人时term会莫名变为0 √
+(2)2A ReElection时，如果上一个leader被断连后重新连接，其log和term应该已经过时，无法再胜任leader工作 √
+(3)2A ReElection时，term最大的leader竟然会显示term过期，转变为Follower！！！
+(4)为什么上一个被断连的leader在断连时会收到term过期的消息?
+（猜测应该是config的逻辑使得活着的server看不见断连的server,但断连的server能看见其他所有server）
+
+10.23：
+(1)2A ReElection时，当上一个leader disconnect后仍重复发送心跳但无法收到任何server的反馈，当重新connect后仍然会是leader状态？
+（leader设置了WaitGroup等待所有server收到心跳后再执行下一次心跳发送，这样在disconnect后会一直卡在Wait()处，导致恢复时出错）√
+2022.10.23 15:20  !!!TEST 2A AC!!!
+(2)
+
+
+
+
