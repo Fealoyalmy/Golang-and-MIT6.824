@@ -3,6 +3,7 @@ package main // 每个go项目必须有main包
 import (
 	"fmt"
 	"strconv"
+	"time"
 ) // 导入fmt包（实现了格式化IO的函数）
 
 var A int       // 全局变量允许仅声明不使用
@@ -160,9 +161,40 @@ func main() { // 必须有main函数
 	////fmt.Fprintf(ofile, "abc")
 	//ofile.Close()
 
-	a := 7 / 2
-	b := 13 / 2
-	c := 4.6 / 2
-	println(a, b, c)
+	//a := 7 / 2
+	//b := 13 / 2
+	//c := 4.6 / 2
+	//println(a, b, c)
+
+	//wg := sync.WaitGroup{}
+	//a := 1
+	//wg.Add(1)
+	//go func() {
+	//	a = 2
+	//	wg.Done()
+	//}()
+	//wg.Wait()
+	//println(a)
+
+	ch := make(chan int)
+	a := 1
+	go func() {
+		select {
+		case ch <- 2:
+		case <-time.After(200 * time.Millisecond):
+		}
+		println("11")
+	}()
+
+	//time.Sleep(300 * time.Millisecond)
+	go func() {
+		select {
+		case a = <-ch:
+		case <-time.After(200 * time.Millisecond):
+		}
+		println("22")
+	}()
+	time.Sleep(500 * time.Millisecond)
+	println(a)
 
 }

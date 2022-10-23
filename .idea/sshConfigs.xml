@@ -2,7 +2,7 @@
 <project version="4">
   <component name="SshConfigs">
     <configs>
-      <sshConfig host="10.2.0.183" id="5830b445-2ffc-4e6f-8f21-01eb9e4d7886" keyPath="D:\keys\mao.pem" port="22" nameFormat="DESCRIPTIVE" username="ubuntu" useOpenSSHConfig="true" />
+      <sshConfig host="10.2.0.183" id="5830b445-2ffc-4e6f-8f21-01eb9e4d7886" keyPath="D:\CodingWorkspace\keys\mao.pem" port="22" nameFormat="DESCRIPTIVE" username="ubuntu" useOpenSSHConfig="true" />
     </configs>
   </component>
 </project>
