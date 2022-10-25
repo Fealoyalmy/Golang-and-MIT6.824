@@ -19,7 +19,7 @@ Candidates（§5.2）：
 Leaders: 
 • 选举时：向每个服务器发送初始的空 AppendEntries RPC（心跳）；在空闲期间重复以防止选举超时（§5.2）
 • 如果从客户端收到命令：将 entry 附加到本地 log，在 entry 应用于状态机后做出响应（§5.3） 
-• 如果 follower 的最后一个 logIndex ≥ nextIndex：发送 AppendEntries RPC 日志条目从 nextIndex 开始 
+• 如果leader的最后一个logIndex ≥ 对于某个follower的nextIndex：发送 AppendEntries RPC 日志条目从 nextIndex 开始
   • 如果成功：为 follower 更新 nextIndex 和 matchIndex（§5.3） 
   • 如果 AppendEntries 由于日志不一致而失败：减少 nextIndex 并重试（§5.3） 
 • 如果存在 N 使得 N > commitIndex，则大多数 matchIndex[i] ≥ N，且 log[N].term == currentTerm：设置 commitIndex = N（§5.3，§5.4）
@@ -73,5 +73,24 @@ TODO:
 (2)
 
 
+选举安全:一个任期最多只能选出一位领导人。§5.2 √
+Leader-only追加:Leader从不覆盖或删除日志中的记录;它只追加新条目。§5.3 √
+日志匹配:如果两个日志中包含一个索引和项相同的条目，则该索引下所有的日志都是相同的。§5.3
+Leader完整性:如果一个日志条目在给定的术语中提交，那么该条目将出现在所有高编号术语的Leader的日志中。§5.4
+状态机安全:如果一个服务器在一个给定的索引上应用了一个日志条目到它的状态机上，那么其他服务器就不会对同一个索引应用一个不同的日志条目。§5.4.3
 
 
+leader会对没有达到一致的server无限重试AppendEntries √
+当大部分server都已经完成log条目的复制，leader会提交该log条目（这也会提交leader的所有先前log条目，包括以前leader创建的条目） √
+leader保持跟踪已知要提交的最高index，将其包含在AppendEntries RPC中，以便follower能够相应提交并将其应用 √
+follower的冲突log条目将被leader的覆盖 √
+当一个leader初次掌权时他将所有follower对应的nextindex初始化为自己的log的最后index的下一个（如果follower与其日志不一致将会返回false） √
+每当拒绝后leader会减少与该follower对应的nextindex并重试，直到到达匹配的点
+一旦返回true，则表示follower已经删除了冲突条目并添加了新条目，并且在term的剩下时间里会与leader保持一致
+
+
+
+
+
+LLLL 2XL XL XL XL LLL XL LLLLLL 2XL XL LL XL LML XL XL XL M L
+MLM XL XL LL XL XL L

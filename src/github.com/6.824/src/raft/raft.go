@@ -73,9 +73,9 @@ type ApplyMsg struct {
 
 // 定义日志条目
 type Log struct {
-	Index   int    // 索引
-	Command string // 日志命令
-	Term    int    // 当前日志条目所在term
+	Index   int         // 索引
+	Command interface{} // 日志命令
+	Term    int         // 当前日志条目所在term
 }
 
 // A Go object implementing a single Raft peer.
@@ -100,8 +100,8 @@ type Raft struct {
 	commitIndex int // 已知被提交的最高log条目
 	lastApplied int // 应用到状态机的上一条log条目
 
-	nextIndex  int // 要送到服务器的下一个log Index (each)
-	matchIndex int // 已知被备份到服务器的最新log Index (each)
+	nextIndex  []int // 要送到服务器的下一个log Index (each)
+	matchIndex []int // 已知被备份到服务器的最新log Index (each)
 }
 
 // return currentTerm and whether this server
@@ -276,7 +276,10 @@ func (rf *Raft) sendRV2All() {
 					fmt.Printf("VoteNum = %d\n", voteNum)
 					if voteNum > len(rf.peers)/2 { // 如果收到的票数超过总数的一半则成为leader
 						rf.role = 2
-						//rf.votedFor = -1
+						for i := 0; i < allPeers; i++ { // 对所有follower初始化
+							rf.nextIndex = append(rf.nextIndex, len(rf.log)) // 初始化为自己log的最后index的下一个
+							rf.matchIndex = append(rf.matchIndex, 0)         // 初始化为0，单调递增
+						}
 						go func() {
 							select {
 							case rf.ch <- "BecomeLeader":
@@ -366,13 +369,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.votedFor = -1
 			return
 		}
-		if args.PreLogIndex <= len(rf.log)-1 &&
+		if args.PreLogIndex < len(rf.log) &&
 			args.PreLogTerm != rf.log[args.PreLogIndex].Term { // 如果leader的最新log前的最后条目term跟rf的不匹配 (AE2)
 			reply.Success = false
 			return
 		}
 		//if len(rf.log)-1 == args.PreLogIndex && rf.log[len(rf.log)-1].Term == args.PreLogTerm {
-		if args.PreLogIndex <= len(rf.log)-1 &&
+		if args.PreLogIndex < len(rf.log) &&
 			args.PreLogTerm == rf.log[args.PreLogIndex].Term { // 如果rf包含与leader最新log之前匹配的log部分 (reply.success)
 			reply.Success = true
 		} else { // 如果follower中的log与leader的不一致
@@ -418,25 +421,49 @@ func (rf *Raft) sendAE2All() {
 	allPeers := len(rf.peers)
 	fmt.Printf("Server%d(%s %d) 向所有其他服务器发送AppendEntries\n", rf.me, roleMap(rf.role), term)
 	rf.mu.Unlock()
+	successRcv := 0                 // 收到follower返回success的数量
 	for i := 0; i < allPeers; i++ { // 向每个服务器发送心跳
 		if i != rf.me {
 			//fmt.Printf("Server%d(%s %d) 向Server%d sendAppendEntries!\n", rf.me, roleMap(role), term, server)
-			//rf.wg.Add(1)
 			server := i
 			go func() {
+				for i := rf.nextIndex[server]; i < len(rf.log); i++ {
+					aeArgs.Entries = append(aeArgs.Entries, rf.log[i])
+				}
 				aeReply := AppendEntriesReply{Term: term}
 				rf.sendAppendEntries(server, &aeArgs, &aeReply) // 并行发送保证Leader不会因为等待follower接收心跳耽误时间
+				rf.mu.Lock()
 				if aeReply.Success == false {
-					rf.mu.Lock()
 					if rf.currentTerm < aeReply.Term { // (Rules All 2)
 						fmt.Printf("Server%d(%s %d) term过期，转变为Follower!\n", rf.me, roleMap(rf.role), rf.currentTerm)
 						rf.currentTerm = aeReply.Term
 						rf.role = 0
 						rf.votedFor = -1
+					} else {
+						go func() {
+							for aeReply.Success == false { // 如果follower的log不匹配则无限重发
+								if rf.role == 2 {
+									rf.nextIndex[server]--
+									for i := rf.nextIndex[server]; i < len(rf.log); i++ {
+										aeArgs.Entries = append(aeArgs.Entries, rf.log[i])
+									}
+									rf.sendAppendEntries(server, &aeArgs, &aeReply)
+								} else {
+									break
+								}
+							}
+						}()
 					}
-					rf.mu.Unlock()
+				} else { // follower与leader的log一致
+					successRcv++
+					// TODO 不一定正确
+					rf.nextIndex[server] = len(rf.log)
+					rf.matchIndex[server] = len(rf.log) - 1
+					if successRcv > len(rf.peers)/2 { // 如果收到大多数follower反馈成功则提交当前条目
+						rf.commitIndex = len(rf.log) - 1
+					}
 				}
-				//rf.wg.Done()
+				rf.mu.Unlock()
 			}()
 		}
 	}
@@ -460,6 +487,19 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) { //2B
 	isLeader := true
 
 	// Your code here (2B).
+	if rf.killed() == false {
+		rf.mu.Lock()
+		if rf.role != 2 {
+			isLeader = false
+		}
+		log := Log{len(rf.log), command, rf.currentTerm}
+		rf.log = append(rf.log, log)
+		index = rf.commitIndex
+		term = rf.currentTerm
+		rf.mu.Unlock()
+	} else {
+		isLeader = false
+	}
 
 	return index, term, isLeader
 }
@@ -579,8 +619,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.log = append(rf.log, Log{1, "init", rf.currentTerm})
 	rf.commitIndex = 0
 	rf.lastApplied = 0
-	rf.nextIndex = rf.commitIndex + 1
-	rf.matchIndex = rf.commitIndex
+	rf.nextIndex = []int{}
+	rf.matchIndex = []int{}
 
 	// initialize from role persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
