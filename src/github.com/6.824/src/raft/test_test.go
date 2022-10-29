@@ -147,11 +147,11 @@ func TestBasicAgree2B(t *testing.T) {
 
 	iters := 3
 	for index := 1; index < iters+1; index++ {
-		nd, _ := cfg.nCommitted(index)
+		nd, _ := cfg.nCommitted(index) // 返回commitIndex=index的server个数
 		if nd > 0 {
 			t.Fatalf("some have committed before Start()")
 		}
-
+		println("one ", index*100)
 		xindex := cfg.one(index*100, servers, false)
 		if xindex != index {
 			t.Fatalf("got Index %v but expected %v", xindex, index)

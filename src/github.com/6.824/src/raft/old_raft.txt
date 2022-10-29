@@ -82,7 +82,6 @@ type Raft struct {
 	mu        sync.Mutex // Lock to protect shared access to this peer's role
 	wg        sync.WaitGroup
 	cd        sync.Cond
-	applyCh   chan ApplyMsg
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted role
 	me        int                 // this peer's Index into peers[]
@@ -384,13 +383,41 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 					} else {
 						rf.log = append(rf.log, args.Entries[i])
 					}
-					go rf.sendApplyMsg(args.Entries[i].Command, args.PreLogIndex+i+1)
+					//if len(rf.log) <= len(args.Entries) { // 用leader的覆盖rf中不一致的部分 (AE3)
+					//	if rf.log[args.PreLogIndex+i+1] != args.Entries[i] {
+					//		rf.log[args.PreLogIndex+i+1] = args.Entries[i]
+					//	}
+					//} else { // 在rf中append没有的部分 (AE4)
+					//	rf.log = append(rf.log, args.Entries[i])
+					//}
 				}
 				reply.Success = true
 			}
 		} else {
 			reply.Success = false
 		}
+
+		//if args.PreLogIndex < len(rf.log) &&
+		//	args.PreLogTerm != rf.log[args.PreLogIndex].Term { // 如果leader的最新log前的最后条目term跟rf的不匹配 (AE2)
+		//	reply.Success = false
+		//	return
+		//}
+		////if len(rf.log)-1 == args.PreLogIndex && rf.log[len(rf.log)-1].Term == args.PreLogTerm {
+		//if args.PreLogIndex < len(rf.log) &&
+		//	args.PreLogTerm == rf.log[args.PreLogIndex].Term { // 如果rf包含与leader最新log之前匹配的log部分 (reply.success)
+		//	reply.Success = true
+		//} else { // 如果follower中的log与leader的不一致
+		//	for i := 0; i < len(args.Entries); i++ {
+		//		if len(rf.log) <= len(args.Entries) { // 用leader的覆盖rf中不一致的部分 (AE3)
+		//			if rf.log[i] != args.Entries[i] {
+		//				rf.log[i] = args.Entries[i]
+		//			}
+		//		} else { // 在rf中append没有的部分 (AE4)
+		//			rf.log = append(rf.log, args.Entries[i])
+		//		}
+		//	}
+		//}
+
 		// 设置follower的最后提交logIndex = min(leader的提交logIndex,rf的最后logIndex) (AE5)
 		if args.LeaderCommit > rf.commitIndex {
 			if args.LeaderCommit >= len(rf.log) {
@@ -398,6 +425,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			} else {
 				rf.commitIndex = args.LeaderCommit
 			}
+			rf.cd.Signal()
 		}
 	}
 }
@@ -452,18 +480,88 @@ func (rf *Raft) sendAE2All() {
 	rf.mu.Lock()
 	allPeers := len(rf.peers)
 	fmt.Printf("Server%d(%s %d) 向所有其他服务器发送AppendEntries\n", rf.me, roleMap(rf.role), rf.currentTerm)
-	//fmt.Printf("Server%d log=[%v]\n", rf.me, rf.log)
 	rf.mu.Unlock()
 	for i := 0; i < allPeers; i++ { // 向每个服务器发送心跳
 		if i != rf.me {
 			server := i
 			rf.mu.Lock()
 			fmt.Printf("Server%d 向Server%d sendAppendEntries!\n", rf.me, server)
+			fmt.Printf("Server%d log=[%v]\n", rf.me, rf.log)
 			rf.mu.Unlock()
 			go rf.oneAppendEntries(server)
 		}
 	}
 }
+
+//func (rf *Raft) sendAE2All() {
+//	rf.mu.Lock()
+//	aeArgs := AppendEntriesArgs{
+//		Term:         rf.currentTerm,             // leader的term
+//		LeaderID:     rf.me,                      // follower重定向client
+//		PreLogIndex:  len(rf.log) - 1,            // 新条目之前的日志条目index
+//		PreLogTerm:   rf.log[len(rf.log)-1].Term, // 新条目之前的日志条目term
+//		Entries:      []Log{},                    // 需要存储的log条目
+//		LeaderCommit: rf.commitIndex,             // leader的提交index
+//	}
+//	term := rf.currentTerm
+//	allPeers := len(rf.peers)
+//	fmt.Printf("Server%d(%s %d) 向所有其他服务器发送AppendEntries\n", rf.me, roleMap(rf.role), term)
+//	rf.mu.Unlock()
+//	successRcv := 0                 // 收到follower返回success的数量
+//	for i := 0; i < allPeers; i++ { // 向每个服务器发送心跳
+//		if i != rf.me {
+//			server := i
+//			rf.mu.Lock()
+//			for i := rf.nextIndex[server]; i < len(rf.log); i++ {
+//				aeArgs.Entries = append(aeArgs.Entries, rf.log[i])
+//			}
+//			fmt.Printf("Server%d(%s %d) 向Server%d sendAppendEntries! log=[%v]\n", rf.me, roleMap(rf.role), term, server, rf.log)
+//			rf.mu.Unlock()
+//			aeReply := AppendEntriesReply{Term: term}
+//			go func() {
+//				rf.sendAppendEntries(server, &aeArgs, &aeReply) // 并行发送保证Leader不会因为等待follower接收心跳耽误时间
+//				rf.mu.Lock()
+//				if aeReply.Success == false {
+//					if rf.currentTerm < aeReply.Term { // (Rules All 2)
+//						fmt.Printf("Server%d(%s %d) term过期，转变为Follower!\n", rf.me, roleMap(rf.role), rf.currentTerm)
+//						rf.currentTerm = aeReply.Term
+//						rf.role = 0
+//						rf.votedFor = -1
+//						rf.mu.Unlock()
+//					} else { // 表明log不匹配
+//						rf.mu.Unlock()
+//						go func() {
+//							for aeReply.Success == false { // 如果follower的log不匹配则无限重发
+//								rf.mu.Lock()
+//								if rf.role == 2 {
+//									rf.nextIndex[server]--
+//									for i := rf.nextIndex[server]; i < len(rf.log); i++ {
+//										aeArgs.Entries = append(aeArgs.Entries, rf.log[i])
+//									}
+//									rf.mu.Unlock()
+//									rf.sendAppendEntries(server, &aeArgs, &aeReply)
+//								} else { // 如果log匹配了则结束重发
+//									rf.mu.Unlock()
+//									return
+//								}
+//								time.Sleep(hbInterval * time.Millisecond) // 间隔100ms再重发
+//							}
+//						}()
+//					}
+//				} else { // follower与leader的log一致
+//					successRcv++
+//					// TODO 不一定正确
+//					rf.nextIndex[server] = len(rf.log)
+//					rf.matchIndex[server] = len(rf.log) - 1
+//					if successRcv > len(rf.peers)/2 { // 如果收到大多数follower反馈成功则提交当前条目
+//						rf.commitIndex = len(rf.log) - 1
+//					}
+//					rf.mu.Unlock()
+//				}
+//			}()
+//		}
+//	}
+//}
 
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next Command to be appended to Raft's log. if this
@@ -487,16 +585,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) { //2B
 		rf.mu.Lock()
 		if rf.role == 2 {
 			isLeader = true
-			if command != rf.log[len(rf.log)-1].Command {
-				newlog := Log{len(rf.log), command, rf.currentTerm}
-				rf.log = append(rf.log, newlog)
-				rf.matchIndex[rf.me] = len(rf.log) - 1 // 以便过半提交log entry
-			}
-			index = len(rf.log) - 1
+			newlog := Log{len(rf.log), command, rf.currentTerm}
+			rf.log = append(rf.log, newlog)
+			index = rf.commitIndex
 			term = rf.currentTerm
-			//rf.cd.Signal()
-			go rf.sendApplyMsg(command, len(rf.log)-1)
-			//println(rf.me, rf.role, rf.log)
+			println(rf.me, rf.role, rf.log)
 		}
 		rf.mu.Unlock()
 	}
@@ -597,40 +690,28 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 					if rf.matchIndex[sv] >= i {
 						precommit++
 					}
-					if precommit > len(rf.peers)/2 {
+					if precommit > (len(rf.peers)-1)/2 {
 						rf.commitIndex = i
 						fmt.Printf("******Server%d commitIndex=%d!\n", rf.me, rf.commitIndex)
+						//go func() {
+						//	applyCh <- ApplyMsg{CommandValid: true, Command: rf.log[i].Command, CommandIndex: i}
+						//}()
+						rf.cd.Signal()
 						break
 					}
 				}
-				if precommit <= len(rf.peers)/2 {
+				if precommit <= (len(rf.peers)-1)/2 {
 					break
 				}
 			}
 			rf.mu.Unlock()
 			time.Sleep(hbInterval * time.Millisecond) // 间隔100ms发送一次心跳
+			// TODO 推进 commitIndex 的代码将需要踢apply goroutine；使用条件可能是最简单的变量（Go 的 sync.Cond）
 		}
 	}
 	//rf.Kill()
 	log.Printf("Server%d 退出!", rf.me)
 }
-
-func (rf *Raft) sendApplyMsg(cmd interface{}, index int) {
-	//fmt.Printf("Server%d sendApplyMsg(%v, %d)\n", rf.me, cmd, index)
-	rf.applyCh <- ApplyMsg{CommandValid: true, Command: cmd, CommandIndex: index}
-}
-
-// 向applyCh通道发送提交日志
-//func (rf *Raft) sendApplyMsg(applyCh chan ApplyMsg) {
-//	for {
-//		rf.cd.L.Lock()
-//		rf.cd.Wait()
-//		rf.mu.Lock()
-//		rf.applyCh <- ApplyMsg{CommandValid: true, Command: rf.log[rf.commitIndex].Command, CommandIndex: rf.commitIndex}
-//		rf.mu.Unlock()
-//		rf.cd.L.Unlock()
-//	}
-//}
 
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -651,15 +732,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.role = 0               // 初始化为follower
 	rf.votedFor = -1          // 初始化投票指向为无
 	rf.ch = make(chan string) // 创建通道
-	rf.cd.L = new(sync.Mutex)
-	rf.applyCh = applyCh
 	rf.currentTerm = 1
 	rf.log = append(rf.log, Log{0, "init", 0})
 	rf.commitIndex = -1
 	rf.lastApplied = -1
+	//rf.nextIndex = []int{}
 	for i := 0; i < len(peers); i++ {
 		rf.nextIndex = append(rf.nextIndex, len(rf.log))
 	}
+	//rf.matchIndex = []int{}
 	for i := 0; i < len(peers); i++ {
 		rf.matchIndex = append(rf.matchIndex, 0)
 	}
@@ -669,7 +750,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker(applyCh)
-	//go rf.sendApplyMsg(applyCh)
+	rf.cd.L = new(sync.Mutex)
+	go func() {
+		for {
+			rf.cd.L.Lock()
+			rf.cd.Wait()
+			rf.mu.Lock()
+			applyCh <- ApplyMsg{CommandValid: true, Command: rf.log[rf.commitIndex].Command, CommandIndex: rf.commitIndex}
+			rf.mu.Unlock()
+			rf.cd.L.Unlock()
+		}
+	}()
 
 	return rf
 }

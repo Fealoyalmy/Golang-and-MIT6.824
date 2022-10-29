@@ -70,7 +70,9 @@ TODO:
 (1)2A ReElection时，当上一个leader disconnect后仍重复发送心跳但无法收到任何server的反馈，当重新connect后仍然会是leader状态？
 （leader设置了WaitGroup等待所有server收到心跳后再执行下一次心跳发送，这样在disconnect后会一直卡在Wait()处，导致恢复时出错）√
 2022.10.23 15:20  !!!TEST 2A AC!!!
-(2)
+
+10.27:
+(1)2B  BasicAgreement时，raft.go第384行存在rf.log数组长度为0但寻址下标溢出的情况（待改）
 
 
 选举安全:一个任期最多只能选出一位领导人。§5.2 √
@@ -90,7 +92,3 @@ follower的冲突log条目将被leader的覆盖 √
 
 
 
-
-
-LLLL 2XL XL XL XL LLL XL LLLLLL 2XL XL LL XL LML XL XL XL M L
-MLM XL XL LL XL XL L

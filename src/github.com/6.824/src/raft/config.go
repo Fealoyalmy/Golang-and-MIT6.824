@@ -144,7 +144,7 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 				m.CommandIndex, i, m.Command, j, old)
 		}
 	}
-	_, prevok := cfg.logs[i][m.CommandIndex-1]
+	_, prevok := cfg.logs[i][m.CommandIndex-1] // 查看上一个index是否被提交
 	cfg.logs[i][m.CommandIndex] = v
 	if m.CommandIndex > cfg.maxIndex {
 		cfg.maxIndex = m.CommandIndex
@@ -501,7 +501,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 	for time.Since(t0).Seconds() < 10 {
 		// try all the servers, maybe one is the leader.
 		index := -1
-		for si := 0; si < cfg.n; si++ {
+		for si := 0; si < cfg.n; si++ { // 遍历server找leader传送new cmd
 			starts = (starts + 1) % cfg.n
 			var rf *Raft
 			cfg.mu.Lock()
@@ -510,23 +510,27 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			}
 			cfg.mu.Unlock()
 			if rf != nil {
-				index1, _, ok := rf.Start(cmd)
+				index1, _, ok := rf.Start(cmd) // 调用rf的Start接口传送cmd，leader会把cmd写入新log
 				if ok {
-					index = index1
+					index = index1 // 获取leader的commitIndex
+					fmt.Printf("config: index=%d\n", index)
 					break
 				}
 			}
 		}
 
-		if index != -1 {
+		if index != -1 { // 如果commitIndex值不为初始值，则比较commitIndex对应的cmd是否一致
 			// somebody claimed to be the leader and to have
 			// submitted our Command; wait a while for agreement.
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
-				nd, cmd1 := cfg.nCommitted(index)
+				nd, cmd1 := cfg.nCommitted(index) // 获取已同步更新为commitIndex的follower数量与对应的cmd
+				//fmt.Printf("config: cmd=%v cmd1=%v nd=%d\n", cmd, cmd1, nd)
+
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {
+						fmt.Printf("return index\n")
 						// and it was the Command we submitted.
 						return index
 					}

@@ -196,11 +196,27 @@ func main() { // 必须有main函数
 	//time.Sleep(500 * time.Millisecond)
 	//println(a)
 
-	var a []int
-	a = []int{}
+	//var a []int
+	//a = []int{}
+	//
+	//a = append(a, 1)
+	//a = append(a, 2)
+	//println(a[0], a[1])
 
-	a = append(a, 1)
-	a = append(a, 2)
-	println(a[0], a[1])
+	a := 0
+	for i := 0; i < 3; i++ {
+		go f2(a)
+	}
+	fmt.Println(a)
+}
 
+func f2(n int) {
+	n++
+	println("1")
+	f3(n)
+}
+
+func f3(n int) {
+	n++
+	println("1")
 }
