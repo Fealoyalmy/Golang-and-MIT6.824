@@ -67,12 +67,32 @@ TODO:
 （猜测应该是config的逻辑使得活着的server看不见断连的server,但断连的server能看见其他所有server）
 
 10.23：
-(1)2A ReElection时，当上一个leader disconnect后仍重复发送心跳但无法收到任何server的反馈，当重新connect后仍然会是leader状态？
+2A ReElection时，当上一个leader disconnect后仍重复发送心跳但无法收到任何server的反馈，当重新connect后仍然会是leader状态？
 （leader设置了WaitGroup等待所有server收到心跳后再执行下一次心跳发送，这样在disconnect后会一直卡在Wait()处，导致恢复时出错）√
 2022.10.23 15:20  !!!TEST 2A AC!!!
 
 10.27:
-(1)2B  BasicAgreement时，raft.go第384行存在rf.log数组长度为0但寻址下标溢出的情况（待改）
+2B  BasicAgreement时，raft.go第384行存在rf.log数组长度为0但寻址下标溢出的情况（待改）
+
+10.29
+2B Test:
+FAIL: TestRejoin2B (13.11s)
+config.go:547: one(104) failed to reach agreement
+
+FAIL: TestBackup2B (28.39s)
+config.go:547: one(8033372341600601497) failed to reach agreement
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 选举安全:一个任期最多只能选出一位领导人。§5.2 √
