@@ -76,11 +76,6 @@ TODO:
 
 10.29
 2B Test:
-FAIL: TestRejoin2B (13.11s)
-config.go:547: one(104) failed to reach agreement
-
-FAIL: TestBackup2B (28.39s)
-config.go:547: one(8033372341600601497) failed to reach agreement
 
 
 
