@@ -612,6 +612,7 @@ func TestPersist12C(t *testing.T) {
 
 	cfg.begin("Test (2C): basic persistence")
 
+	log.Printf("input 11\n!")
 	cfg.one(11, servers, true)
 
 	// crash and re-start all
@@ -619,10 +620,13 @@ func TestPersist12C(t *testing.T) {
 		cfg.start1(i, cfg.applier)
 	}
 	for i := 0; i < servers; i++ {
+		log.Printf("Disconnect server%d\n!", i)
 		cfg.disconnect(i)
+		log.Printf("Connect server%d\n!", i)
 		cfg.connect(i)
 	}
 
+	log.Printf("input 12\n!")
 	cfg.one(12, servers, true)
 
 	leader1 := cfg.checkOneLeader()
@@ -832,7 +836,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
 		if iters == 200 {
-			cfg.setlongreordering(true)
+			//cfg.setlongreordering(true)
 		}
 		leader := -1
 		for i := 0; i < servers; i++ {
@@ -870,6 +874,8 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		}
 	}
 
+	//cfg.setlongreordering(false) // 取消延迟响应
+	//log.Println("the last one")
 	cfg.one(rand.Int()%10000, servers, true)
 
 	cfg.end()

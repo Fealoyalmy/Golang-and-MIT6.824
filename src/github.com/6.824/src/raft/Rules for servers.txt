@@ -74,12 +74,15 @@ TODO:
 10.27:
 2B  BasicAgreement时，raft.go第384行存在rf.log数组长度为0但寻址下标溢出的情况（待改）
 
-10.29
-2B Test:
+2022.10.30 21:20  !!!TEST 2B AC!!!
+
+10.31:
+2C 第5、8个测试出现问题
 
 
 
 
+unreliable churn
 
 
 

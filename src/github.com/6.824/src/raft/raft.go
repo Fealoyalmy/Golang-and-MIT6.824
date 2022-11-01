@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"6.824/labgob"
+	"bytes"
 	"fmt"
 	"math/rand"
 	//	"bytes"
@@ -128,6 +130,14 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 func (rf *Raft) persist() { //2C
 	// Your code here (2C).
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
+
 	// Example:
 	// w := new(bytes.Buffer)
 	// e := labgob.NewEncoder(w)
@@ -140,9 +150,26 @@ func (rf *Raft) persist() { //2C
 // restore previously persisted role.
 func (rf *Raft) readPersist(data []byte) { //2C
 	if data == nil || len(data) < 1 { // bootstrap without any role?
+		fmt.Println("重启找不到 persist data!")
 		return
 	}
 	// Your code here (2C).
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var voteFor int
+	var log []Log
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&voteFor) != nil ||
+		d.Decode(&log) != nil {
+		fmt.Printf("读persister错误！\n")
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = voteFor
+		rf.log = log
+		fmt.Println("readPersist: ", currentTerm, voteFor, log)
+	}
+
 	// Example:
 	// r := bytes.NewBuffer(data)
 	// d := labgob.NewDecoder(r)
@@ -199,7 +226,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	fmt.Printf("Server%d 收到候选人%d 的RequestVote\n", rf.me, args.CandidateID)
+	//fmt.Printf("Server%d 收到候选人%d 的RequestVote\n", rf.me, args.CandidateID)
 	if rf.role == 0 {
 		go func() {
 			select {
@@ -216,6 +243,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else if args.Term > rf.currentTerm { // 如果rf自己的term已经过期，则转换为follower并投票给候选人
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
+		rf.persist() // 保存数据至persister
 		rf.role = 0
 		//reply.VoteGranted = true
 	}
@@ -225,6 +253,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else if rf.votedFor == -1 && (rf.log[len(rf.log)-1].Term < args.LastLogTerm || // rf没投票且候选人的最大logTerm>rf的
 		rf.log[len(rf.log)-1].Term == args.LastLogTerm && len(rf.log)-1 <= args.LastLogIndex) { // 或Term相同时候选人的log比rf长
 		rf.votedFor = args.CandidateID // 投票给候选人
+		rf.persist()                   // 保存数据至persister
 		rf.role = 0                    // rf转变为follower
 		reply.VoteGranted = true
 	} else if rf.votedFor == args.CandidateID {
@@ -252,6 +281,7 @@ func (rf *Raft) sendRV2All() {
 		LastLogTerm:  setLogTerm(rf)}  // rf.log[rf.commitIndex].Term, // 候选人的最后一个log条目对应的term
 	term := rf.currentTerm
 	rf.votedFor = rf.me // 候选人投票给自己
+	rf.persist()        // 保存数据至persister
 	allPeers := len(rf.peers)
 	fmt.Printf("Server%d(%s %d) 向所有其他服务器发送RequestVote!\n", rf.me, roleMap(rf.role), term)
 	rf.mu.Unlock()
@@ -275,7 +305,7 @@ func (rf *Raft) sendRV2All() {
 							rf.matchIndex[i] = 0          // 初始化为0，单调递增
 						}
 						rf.matchIndex[rf.me] = len(rf.log) - 1
-						fmt.Printf("Server%d(%s %d) 初始化next,match!\n", rf.me, roleMap(rf.role), rf.currentTerm)
+						//fmt.Printf("Server%d(%s %d) 初始化next,match!\n", rf.me, roleMap(rf.role), rf.currentTerm)
 						go func() {
 							select {
 							case rf.ch <- "BecomeLeader":
@@ -292,6 +322,7 @@ func (rf *Raft) sendRV2All() {
 						rf.currentTerm = rvReply.Term // 更新到最新term值
 						rf.role = 0
 						rf.votedFor = -1
+						rf.persist() // 保存数据至persister
 					}
 				}
 				rf.mu.Unlock()
@@ -372,12 +403,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if args.Term > rf.currentTerm { // 如果rf自己的term已经过期,则转变为follower (Rules All 2)
 			rf.currentTerm = args.Term
 			rf.votedFor = -1
+			rf.persist() // 保存数据至persister
 			return
 		}
 		if args.PreLogIndex < len(rf.log) {
 			if args.PreLogTerm == rf.log[args.PreLogIndex].Term { // 如果rf跟leader最新log之前的log匹配 (reply.success)
 				rf.log = rf.log[:args.PreLogIndex+1]
 				rf.log = append(rf.log, args.Entries...)
+				rf.persist() // 保存数据至persister
 				reply.Success = true
 				// 设置follower的最后提交logIndex = min(leader的提交logIndex,rf的最后logIndex) (AE5)
 				if args.LeaderCommit > rf.commitIndex {
@@ -427,6 +460,7 @@ func (rf *Raft) oneAppendEntries(server int, term int) {
 			rf.currentTerm = aeReply.Term
 			rf.role = 0
 			rf.votedFor = -1
+			rf.persist() // 保存数据至persister
 			rf.mu.Unlock()
 		} else { // 若log不匹配则重发
 			if rf.nextIndex[server] > 1 {
@@ -456,7 +490,7 @@ func (rf *Raft) sendAE2All() {
 		if i != rf.me {
 			server := i
 			rf.mu.Lock()
-			fmt.Printf("Server%d 向Server%d sendAppendEntries!\n", rf.me, server)
+			//fmt.Printf("Server%d 向Server%d sendAppendEntries!\n", rf.me, server)
 			term := rf.currentTerm
 			rf.mu.Unlock()
 			go rf.oneAppendEntries(server, term)
@@ -491,6 +525,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) { //2B
 				rf.log = append(rf.log, newlog)
 				rf.matchIndex[rf.me] = len(rf.log) - 1 // 以便过半提交log entry
 				rf.nextIndex[rf.me] = len(rf.log)
+				rf.persist() // 保存数据至persister
 			}
 			index = len(rf.log) - 1
 			term = rf.currentTerm
@@ -539,9 +574,9 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 				rand.Seed(time.Now().UnixNano())                // 生成随机种子
 				rvTimeout := rand.Intn(rvEnd-rvStart) + rvStart // 随机设置选举超时时间
 				select {
-				case msg := <-rf.ch: // 如收到RPC消息则打印日志（会持续循环等待RPC，直到除非超时）
+				case <-rf.ch: // 如收到RPC消息则打印日志（会持续循环等待RPC，直到除非超时）
 					rf.mu.Lock()
-					fmt.Printf("Server%d(%s %d) 收到ch：%v\n", rf.me, roleMap(role), rf.currentTerm, msg)
+					//fmt.Printf("Server%d(%s %d) 收到ch：%v\n", rf.me, roleMap(role), rf.currentTerm, msg)
 					rf.mu.Unlock()
 				case <-time.After(time.Duration(rvTimeout) * time.Millisecond): // 未收到RPC消息，则超时转变为候选人
 					rf.mu.Lock()
@@ -549,6 +584,7 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 					rf.role = 1
 					rf.currentTerm++
 					rf.votedFor = -1
+					rf.persist() // 保存数据至persister
 					rf.mu.Unlock()
 					break Wait // break外部的等待心跳for循环
 				}
@@ -560,9 +596,9 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 				rand.Seed(time.Now().UnixNano())                // 生成随机种子
 				rvTimeout := rand.Intn(rvEnd-rvStart) + rvStart // 随机设置选举超时时间
 				select {                                        // TODO 此处选举超时可能存在问题，应该在发出投票请求前就开始计时
-				case msg := <-rf.ch: // 如果成功当选或收到appendEntries RPC 则跳出选举状态
+				case <-rf.ch: // 如果成功当选或收到appendEntries RPC 则跳出选举状态
 					rf.mu.Lock()
-					fmt.Printf("Server%d(%s %d) 收到ch：%v\n", rf.me, roleMap(role), rf.currentTerm, msg)
+					//fmt.Printf("Server%d(%s %d) 收到ch：%v\n", rf.me, roleMap(role), rf.currentTerm, msg)
 					rf.mu.Unlock()
 					break Vote // break外部的选举for循环
 				case <-time.After(time.Duration(rvTimeout) * time.Millisecond): // 否则因选举超时而重新开始选举
@@ -571,6 +607,7 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 					rf.currentTerm++
 					rf.role = 1
 					rf.votedFor = -1
+					rf.persist() // 保存数据至persister
 					rf.mu.Unlock()
 				}
 			}
@@ -590,7 +627,7 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 					if precommit > len(rf.peers)/2 { // 当有大多数server已将条目i复制到自己的log中时
 						rf.commitIndex = i // 置leader的commitIndex为i
 						rf.cd.Signal()
-						fmt.Printf("******Server%d commitIndex=%d!\n", rf.me, rf.commitIndex)
+						//fmt.Printf("******Server%d commitIndex=%d!\n", rf.me, rf.commitIndex)
 						break
 					}
 				}
@@ -603,6 +640,7 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 		}
 	}
 	//rf.Kill()
+
 	log.Printf("Server%d 退出!", rf.me)
 }
 
