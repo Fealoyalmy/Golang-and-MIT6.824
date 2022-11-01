@@ -513,7 +513,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				index1, _, ok := rf.Start(cmd) // 调用rf的Start接口传送cmd，leader会把cmd写入新log
 				if ok {
 					index = index1 // 获取leader的commitIndex
-					fmt.Printf("config: index=%d\n", index)
+					//fmt.Printf("config: index=%d\n", index)
 					break
 				}
 			}
@@ -530,7 +530,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {
-						fmt.Printf("return index\n")
+						//fmt.Printf("return index\n")
 						// and it was the Command we submitted.
 						return index
 					}
