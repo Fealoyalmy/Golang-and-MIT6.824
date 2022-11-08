@@ -465,6 +465,7 @@ func (rf *Raft) oneAppendEntries(server int, term int, commit int) {
 		} else { // 若log不匹配则重发
 			if rf.nextIndex[server] > 1 {
 				rf.nextIndex[server]--
+				//rf.nextIndex[server] = 1
 				rf.mu.Unlock()
 				time.Sleep(hbInterval * time.Millisecond) // 间隔100ms再重发
 				go rf.oneAppendEntries(server, term, commit)
@@ -616,7 +617,7 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 			rf.sendAE2All()
 			rf.mu.Lock()
 			fmt.Printf("Server%d nextIndex=%v matchIndex=%v\n", rf.me, rf.nextIndex, rf.matchIndex)
-			for i := rf.commitIndex; i <= len(rf.log); i++ { // 从commitIndex开始遍历到leader的log尾部
+			for i := rf.commitIndex; i < len(rf.log); i++ { // 从commitIndex开始遍历到leader的log尾部
 				if i <= 0 { // 用于跳过初始化日志
 					continue
 				}
