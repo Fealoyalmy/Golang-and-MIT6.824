@@ -144,7 +144,7 @@ func (rf *Raft) GetState() (int, bool) {
 // save Raft's persistent role to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
-func (rf *Raft) persist() { //2C
+func (rf *Raft) persist() {
 	// Your code here (2C).
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
@@ -156,7 +156,7 @@ func (rf *Raft) persist() { //2C
 }
 
 // restore previously persisted role.
-func (rf *Raft) readPersist(data []byte) { //2C
+func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any role?
 		fmt.Println("重启找不到 persist data!")
 		return
@@ -211,7 +211,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
-func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool { //2D
+func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 	// Your code here (2D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -223,7 +223,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // all info up to and including Index. this means the
 // service no longer needs the log through (and including)
 // that Index. Raft should now trim its log as much as possible.
-func (rf *Raft) Snapshot(index int, snapshot []byte) { //2D
+func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -418,7 +418,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//fmt.Printf("Server%d 收到Leader%d 的sendAppendEntries!\n", rf.me, args.LeaderID)
-	//fmt.Printf("Server%d log=[%v]\n", rf.me, rf.log)
+	fmt.Printf("Server%d log=[%v]\n", rf.me, rf.log)
 	if args.Term < rf.currentTerm { // 如果leader的term已经过期 (AE1)
 		reply.Term = rf.currentTerm
 		reply.Success = false
@@ -439,9 +439,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		if args.PreLogIndex < len(rf.log) {
 			if args.PreLogTerm == rf.log[args.PreLogIndex].Term { // 如果rf跟leader最新log之前的log匹配 (reply.success)
-				rf.log = rf.log[:args.PreLogIndex+1]
-				rf.log = append(rf.log, args.Entries...)
-				rf.persist() // 保存数据至persister
+				rf.log = rf.log[:args.PreLogIndex+1]     // 删除PreLogIndex后面的所有条目
+				rf.log = append(rf.log, args.Entries...) // 将与leader不匹配的新条目附加在PreLogIndex之后
+				rf.persist()                             // 保存数据至persister
 				reply.Success = true
 				// 设置follower的最后提交logIndex = min(leader的提交logIndex,rf的最后logIndex) (AE5)
 				if args.LeaderCommit > rf.commitIndex {
@@ -470,7 +470,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 // 向单个server发送AppendEntries RPC
-func (rf *Raft) oneAppendEntries(server int, term int) {
+func (rf *Raft) oneAppendEntries(server int, term int, commit int) {
 	rf.mu.Lock()
 	aeArgs := AppendEntriesArgs{
 		Term:         term,                                // leader的term
@@ -478,7 +478,7 @@ func (rf *Raft) oneAppendEntries(server int, term int) {
 		PreLogIndex:  rf.nextIndex[server] - 1,            // 新条目之前的日志条目index
 		PreLogTerm:   rf.log[rf.nextIndex[server]-1].Term, // 新条目之前的日志条目term
 		Entries:      []Log{},                             // 需要存储的log条目
-		LeaderCommit: rf.commitIndex}                      // leader的提交index
+		LeaderCommit: commit}                              // leader的提交index
 	aeReply := AppendEntriesReply{Term: rf.currentTerm}
 	for i := rf.nextIndex[server]; i < len(rf.log); i++ {
 		aeArgs.Entries = append(aeArgs.Entries, rf.log[i])
@@ -497,9 +497,10 @@ func (rf *Raft) oneAppendEntries(server int, term int) {
 		} else { // 若log不匹配则重发
 			if rf.nextIndex[server] > 1 {
 				rf.nextIndex[server]--
+				//rf.nextIndex[server] = 1
 				rf.mu.Unlock()
 				time.Sleep(hbInterval * time.Millisecond) // 间隔100ms再重发
-				go rf.oneAppendEntries(server, term)
+				go rf.oneAppendEntries(server, term, commit)
 			} else {
 				rf.mu.Unlock()
 			}
@@ -516,7 +517,7 @@ func (rf *Raft) sendAE2All() {
 	rf.mu.Lock()
 	allPeers := len(rf.peers)
 	fmt.Printf("Server%d(%s %d) 向所有其他服务器发送AppendEntries\n", rf.me, roleMap(rf.role), rf.currentTerm)
-	//fmt.Printf("Server%d log=[%v]\n", rf.me, rf.log)
+	fmt.Printf("Server%d log=[%v]\n", rf.me, rf.log)
 	rf.mu.Unlock()
 	for i := 0; i < allPeers; i++ { // 向每个服务器发送心跳
 		if i != rf.me {
@@ -524,8 +525,9 @@ func (rf *Raft) sendAE2All() {
 			rf.mu.Lock()
 			//fmt.Printf("Server%d 向Server%d sendAppendEntries!\n", rf.me, server)
 			term := rf.currentTerm
+			commit := rf.commitIndex
 			rf.mu.Unlock()
-			go rf.oneAppendEntries(server, term)
+			go rf.oneAppendEntries(server, term, commit)
 		}
 	}
 }
@@ -542,7 +544,7 @@ func (rf *Raft) sendAE2All() {
 // if it's ever committed. the second return value is the current
 // Term. the third return value is true if this server believes it is
 // the leader.
-func (rf *Raft) Start(command interface{}) (int, int, bool) { //2B
+func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
 	isLeader := false // true
@@ -648,7 +650,7 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 			rf.sendAE2All()
 			rf.mu.Lock()
 			fmt.Printf("Server%d nextIndex=%v matchIndex=%v\n", rf.me, rf.nextIndex, rf.matchIndex)
-			for i := rf.commitIndex; i <= len(rf.log); i++ { // 从commitIndex开始遍历到leader的log尾部
+			for i := rf.commitIndex; i < len(rf.log); i++ { // 从commitIndex开始遍历到leader的log尾部
 				if i <= 0 { // 用于跳过初始化日志
 					continue
 				}
@@ -657,7 +659,7 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 					if rf.matchIndex[sv] >= i { // 如果该server的log中有跟i相匹配的条目
 						precommit++ // 则对条目i应用票数+1
 					}
-					if precommit > len(rf.peers)/2 { // 当有大多数server已将条目i复制到自己的log中时
+					if precommit > len(rf.peers)/2 && rf.log[i].Term == rf.currentTerm { // 当有大多数server已将条目i复制到自己的log中时
 						rf.commitIndex = i // 置leader的commitIndex为i
 						go rf.sendApplyMsg(rf.applyCh)
 						//rf.cd.Signal()
@@ -676,11 +678,6 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 	//rf.Kill()
 	log.Printf("Server%d 退出!", rf.me)
 }
-
-//func (rf *Raft) sendApplyMsg(cmd interface{}, index int) {
-//	//fmt.Printf("Server%d sendApplyMsg(%v, %d)\n", rf.me, cmd, index)
-//	rf.applyCh <- ApplyMsg{CommandValid: true, Command: cmd, CommandIndex: index}
-//}
 
 // 向applyCh通道发送消息，表明已将当前server的log按commitIndex真正应用到状态机
 func (rf *Raft) sendApplyMsg(applyCh chan ApplyMsg) {
@@ -718,19 +715,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-	rf.role = 0               // 初始化为follower
-	rf.votedFor = -1          // 初始化投票指向为无
-	rf.ch = make(chan string) // 创建通道
-	rf.cd.L = new(sync.Mutex)
+	rf.role = 0                                // 初始化为follower
+	rf.votedFor = -1                           // 初始化投票指向为无
+	rf.ch = make(chan string)                  // 创建通道
+	rf.cd.L = new(sync.Mutex)                  // 初始化条件变量的锁
 	rf.currentTerm = 1                         // 初始term置为1
 	rf.log = append(rf.log, Log{0, "init", 0}) // 初始化时存放一个日志用于抵消数组下标从0开始的麻烦
 	rf.commitIndex = 0                         // 初始提交日志index置为0
 	rf.lastApplied = 0                         // 初始应用状态机index置为0
-	for i := 0; i < len(peers); i++ {          // 初始每个peer的nextIndex为1
-		rf.nextIndex = append(rf.nextIndex, len(rf.log))
-	}
-	for i := 0; i < len(peers); i++ { // 初始每个peer的matchIndex为0
-		rf.matchIndex = append(rf.matchIndex, 0)
+	for i := 0; i < len(peers); i++ {
+		rf.nextIndex = append(rf.nextIndex, len(rf.log)) // 初始每个peer的nextIndex为1
+		rf.matchIndex = append(rf.matchIndex, 0)         // 初始每个peer的matchIndex为0
 	}
 
 	// initialize from role persisted before a crash
