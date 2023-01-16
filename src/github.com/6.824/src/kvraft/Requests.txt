@@ -1,0 +1,42 @@
+**用raft库构建一个 键值 容错存储服务器（备份状态机）
+
+服务器包含3个操作(用于维护简单的键值对（strings）数据库)：
+Put(key, value)：替换对应键的值
+
+
+Append(key, arg)：向键对应的值中添加参数
+对于不存在的键，应执行put操作
+
+Get(key)：获取键当前对应的值
+对于不存在的键，返回空string
+
+每个client都通过Clerk使用上3种方法与服务器通信
+Clerk管理RPC与服务器的交互（要保证强一致性，同时使得并行操作看起来统一）
+多个备份服务器相比单一服务器实现强一致性会复杂很多（需要在并发请求中选择相同的执行顺序）
+
+PS：应该重读一下Raft论文中的第7、8节
+
+3A：无需担心Raft的日志无限增长
+1.kvserver将操作指令提交到Raft服务器（取决于谁是leader），由Raft的日志存储操作序列，所有的kvserver将会按照Raft的日志序列执行操作指令，并将这些操作应用到它们的键/值数据库，目的是维护相同的键值对数据库
+2.在kvserver提交并稍后应用操作到Raft服务器后，leader将通过RPC反馈结果到Clerk
+3.如果操作提交失败，则server会报告error，Clerk会到不同的服务器重试
+* kvserver应该通过Raft与彼此通信
+
+
+可通过One Client测试：
+在client.go中的3个方法添加RPC代码
+在server.go中实现PutAppend()和Get()的RPC控制器（应该利用Start()在Raft日志中添加Op操作）
+需要完善server.go中的Op结构定义（描述3个方法操作的）
+每个server需要执行出现在applyCh通道中的Op命令
+
+调用Start()后，kvserver需要等待Raft完成共识
+需要持续读applyCh，等待PutAppend()和Get()利用Start()提交到Raft日志的指令（注意kvserver与Raft库之间的死锁）
+可以在Raft的ApplyMsg中添加字段，也可在Raft的RPC（如AppendEntries）中添加字段（但对于大部分实现不是必须的）
+第8节的优化不必要
+
+
+
+3B：需要实现论文中第7节的快照，以便Raft可以弃置旧日志
+
+
+

@@ -39,6 +39,7 @@ const ( // 单位ms
 	//rvTimeout = 300
 )
 
+// 角色映射（int-string)
 func roleMap(role int) string {
 	switch role {
 	case 0:
@@ -86,6 +87,7 @@ type Raft struct {
 	cd        sync.Cond
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted role
+	applyCh   chan ApplyMsg       // 外部关联raft的channel
 	me        int                 // this peer's Index into peers[]
 	dead      int32               // set by Kill()
 
@@ -104,6 +106,20 @@ type Raft struct {
 
 	nextIndex  []int // 要送到服务器的下一个log Index (each)
 	matchIndex []int // 已知被备份到服务器的最新log Index (each)
+
+	lastIncludedIndex int    // 快照的最大log index
+	lastIncludedTerm  int    // 快照的最后一条log term
+	snapshotOffset    int    // 快照可能分块（偏移量）
+	snapshot          []byte // 快照字节数据
+}
+
+// 获取rf最后一个log的index,term
+func (rf *Raft) lastLog() (int, int) {
+	if len(rf.log) == 1 {
+		return rf.lastIncludedIndex, rf.lastIncludedTerm
+	} else {
+		return rf.log[len(rf.log)-1].Index, rf.log[len(rf.log)-1].Term
+	}
 }
 
 // return currentTerm and whether this server
@@ -137,14 +153,6 @@ func (rf *Raft) persist() { //2C
 	e.Encode(rf.log)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
-
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted role.
@@ -169,25 +177,44 @@ func (rf *Raft) readPersist(data []byte) { //2C
 		rf.log = log
 		fmt.Println("readPersist: ", currentTerm, voteFor, log)
 	}
+}
 
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+type InstallSnapshotArgs struct {
+	Term              int    // leader的term
+	LeaderID          int    // 用于follower为客户端重定向
+	LastIncludedIndex int    // 快照所包含的最后index
+	LastIncludedTerm  int    // 快照所包含的最后index对应的term
+	Offset            int    // 块在快照中的字节偏移
+	Data              []byte // 从offset处开始，快照块中的原始字节
+	Done              bool   // 是否是最后块
+}
+
+type InstallSnapshotReply struct {
+	Term int // 当前term(用于leader自我更新)
+}
+
+// InsrallSnapshot RPC
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// 发送快照到应用层
+	applyMsg := ApplyMsg{
+		SnapshotValid: true,
+		Snapshot:      args.Data,
+		SnapshotIndex: args.LastIncludedIndex,
+		SnapshotTerm:  args.LastIncludedTerm}
+	go func() {
+		rf.applyCh <- applyMsg
+	}()
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool { //2D
 	// Your code here (2D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	return true
 }
@@ -198,6 +225,8 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that Index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) { //2D
 	// Your code here (2D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 }
 
@@ -247,6 +276,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.role = 0
 		//reply.VoteGranted = true
 	}
+	//lastIndex, lastTerm := rf.lastLog()
 	if rf.votedFor != -1 && rf.votedFor != args.CandidateID { // rf已投过票且不是投给该候选人
 		fmt.Printf("Candidate%d请求失败！Server%d 已投票给Server%d\n", args.CandidateID, rf.me, rf.votedFor)
 		reply.VoteGranted = false
@@ -300,6 +330,7 @@ func (rf *Raft) sendRV2All() {
 					//fmt.Printf("VoteNum = %d\n", voteNum)
 					if voteNum > len(rf.peers)/2 { // 如果收到的票数超过总数的一半则成为leader
 						rf.role = 2
+						//lastIndex,_ := rf.lastLog()
 						for i := 0; i < allPeers; i++ { // 对所有follower初始化
 							rf.nextIndex[i] = len(rf.log) // 初始化为自己log的最后index的下一个
 							rf.matchIndex[i] = 0          // 初始化为0，单调递增
@@ -419,7 +450,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 					} else {
 						rf.commitIndex = args.LeaderCommit
 					}
-					rf.cd.Signal()
+					go rf.sendApplyMsg(rf.applyCh)
+					//rf.cd.Signal()
 				}
 			} else { // 如果leader的最新log前的最后条目term跟rf的不匹配 (AE2)
 				reply.Success = false
@@ -521,8 +553,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) { //2B
 		if rf.role == 2 {
 			isLeader = true
 			if command != rf.log[len(rf.log)-1].Command {
-				newlog := Log{len(rf.log), command, rf.currentTerm}
-				rf.log = append(rf.log, newlog)
+				// logIndex重新正则化
+				newLog := Log{rf.log[len(rf.log)-1].Index, command, rf.currentTerm}
+				rf.log = append(rf.log, newLog)
 				rf.matchIndex[rf.me] = len(rf.log) - 1 // 以便过半提交log entry
 				rf.nextIndex[rf.me] = len(rf.log)
 				rf.persist() // 保存数据至persister
@@ -626,7 +659,8 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 					}
 					if precommit > len(rf.peers)/2 { // 当有大多数server已将条目i复制到自己的log中时
 						rf.commitIndex = i // 置leader的commitIndex为i
-						rf.cd.Signal()
+						go rf.sendApplyMsg(rf.applyCh)
+						//rf.cd.Signal()
 						//fmt.Printf("******Server%d commitIndex=%d!\n", rf.me, rf.commitIndex)
 						break
 					}
@@ -640,7 +674,6 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 		}
 	}
 	//rf.Kill()
-
 	log.Printf("Server%d 退出!", rf.me)
 }
 
@@ -651,21 +684,21 @@ func (rf *Raft) ticker(applyCh chan ApplyMsg) {
 
 // 向applyCh通道发送消息，表明已将当前server的log按commitIndex真正应用到状态机
 func (rf *Raft) sendApplyMsg(applyCh chan ApplyMsg) {
-	for {
-		rf.cd.L.Lock()
-		rf.cd.Wait()
-		rf.mu.Lock()
-		for rf.commitIndex > rf.lastApplied { // 如果应用到状态机的log Index一直小于commitIndex则一直提交到等于为止
-			rf.lastApplied++
-			msg := ApplyMsg{
-				CommandValid: true,
-				Command:      rf.log[rf.lastApplied].Command,
-				CommandIndex: rf.lastApplied}
-			applyCh <- msg
-		}
-		rf.mu.Unlock()
-		rf.cd.L.Unlock()
+	//for {
+	//	rf.cd.L.Lock()
+	//	rf.cd.Wait()
+	rf.mu.Lock()
+	for rf.commitIndex > rf.lastApplied { // 如果应用到状态机的log Index一直小于commitIndex则一直提交到等于为止
+		rf.lastApplied++
+		msg := ApplyMsg{
+			CommandValid: true,
+			Command:      rf.log[rf.lastApplied].Command,
+			CommandIndex: rf.lastApplied}
+		applyCh <- msg
 	}
+	rf.mu.Unlock()
+	//	rf.cd.L.Unlock()
+	//}
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -681,6 +714,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
+	rf.applyCh = applyCh
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
