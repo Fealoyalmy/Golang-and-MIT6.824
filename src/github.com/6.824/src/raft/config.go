@@ -136,6 +136,7 @@ func (cfg *config) crash1(i int) {
 func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 	err_msg := ""
 	v := m.Command
+	//fmt.Printf("checkLogs Command=%v\n", v)
 	for j := 0; j < len(cfg.logs); j++ {
 		if old, oldok := cfg.logs[j][m.CommandIndex]; oldok && old != v {
 			log.Printf("%v: log %v; server %v\n", i, cfg.logs[i], cfg.logs[j])
@@ -146,6 +147,7 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 	}
 	_, prevok := cfg.logs[i][m.CommandIndex-1] // 查看上一个index是否被提交
 	cfg.logs[i][m.CommandIndex] = v
+	//fmt.Printf("checkLogs cfg.logs[i][%d] = %v\n", m.CommandIndex, cfg.logs[i][m.CommandIndex])
 	if m.CommandIndex > cfg.maxIndex {
 		cfg.maxIndex = m.CommandIndex
 	}
@@ -158,7 +160,9 @@ func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 	for m := range applyCh {
 		if m.CommandValid == false {
 			// ignore other types of ApplyMsg
+			fmt.Printf("ignore other types of ApplyMsg\n")
 		} else {
+			fmt.Printf("recieve msg command=%v\n", m.Command)
 			cfg.mu.Lock()
 			err_msg, prevok := cfg.checkLogs(i, m)
 			cfg.mu.Unlock()
@@ -180,6 +184,7 @@ const SnapShotInterval = 10
 // periodically snapshot raft role
 func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	lastApplied := 0
+	//fmt.Printf("recieve ApplyMsg from %d\n", i)
 	for m := range applyCh {
 		if m.SnapshotValid {
 			//DPrintf("Installsnapshot %v %v\n", m.SnapshotIndex, lastApplied)
@@ -199,6 +204,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 			cfg.mu.Unlock()
 		} else if m.CommandValid && m.CommandIndex > lastApplied {
 			//DPrintf("apply %v lastApplied %v\n", m.CommandIndex, lastApplied)
+			fmt.Printf("apply %v lastApplied %v\n", m.CommandIndex, lastApplied)
 			cfg.mu.Lock()
 			err_msg, prevok := cfg.checkLogs(i, m)
 			cfg.mu.Unlock()
@@ -224,8 +230,8 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 			// commands. Old Command may never happen,
 			// depending on the Raft implementation, but
 			// just in case.
-			// DPrintf("Ignore: Index %v lastApplied %v\n", m.CommandIndex, lastApplied)
-
+			//DPrintf("Ignore: Index %v lastApplied %v\n", m.CommandIndex, lastApplied)
+			fmt.Printf("ignore other types of ApplyMsg\n")
 		}
 	}
 }
@@ -525,7 +531,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index) // 获取已同步更新为commitIndex的follower数量与对应的cmd
-				//fmt.Printf("config: cmd=%v cmd1=%v nd=%d\n", cmd, cmd1, nd)
+				//fmt.Printf("config: index=%d cmd=%v cmd1=%v nd=%d\n", index, cmd, cmd1, nd)
 
 				if nd > 0 && nd >= expectedServers {
 					// committed
@@ -538,13 +544,13 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {
-				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
+				cfg.t.Fatalf("one(%v) failed to reach agreement(不一致)", cmd)
 			}
 		} else {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
+	cfg.t.Fatalf("one(%v) failed to reach agreement(超时)", cmd)
 	return -1
 }
 
