@@ -37,7 +37,7 @@ type GetReply struct {
 	Value string
 }
 
-// 根据客户端ID与请求ID生成唯一的请求码
+// 根据客户端ID与请求ID生成唯一的请求码返回用于构建新op文本
 func UniqueRequestId(clientId int, requestId uint64) uint64 {
 	return uint64(clientId<<32) + requestId&0xffffffff
 }

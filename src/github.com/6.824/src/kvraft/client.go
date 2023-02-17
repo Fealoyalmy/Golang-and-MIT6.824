@@ -61,8 +61,8 @@ func (ck *Clerk) Get(key string) string {
 
 	for {
 		reply := &GetReply{}
-		ok := ck.servers[rpcServerID].Call("KVServer.Get", args, reply)
-		if !ok { // 说明请求的不是leader，依次尝试每个server
+		ok := ck.servers[rpcServerID].Call("KVServer.Get", args, reply) // 远程调用server端的RPC
+		if !ok {                                                        // 说明请求的不是leader，依次尝试每个server
 			rpcServerID++
 			rpcServerID %= len(ck.servers)
 		} else if reply.Err == OK { // 请求成功，获取返回值

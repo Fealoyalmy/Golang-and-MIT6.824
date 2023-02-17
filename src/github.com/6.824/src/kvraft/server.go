@@ -27,9 +27,9 @@ type Op struct {
 	ClientID       int
 	RequestID      uint64
 	OpType         string // “Get“/"Put"/"Append"
-	Key            string
-	Value          string
-	StartTimestamp int64 // 开始时间戳（暂不用）
+	Key            string // 键
+	Value          string // 值
+	StartTimestamp int64  // 开始时间戳（暂不用）
 }
 
 type OpContext struct {
