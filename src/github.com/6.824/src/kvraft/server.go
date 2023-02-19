@@ -208,7 +208,7 @@ func (kv *KVServer) maybeSnapshot(index int) {
 	if kv.maxraftstate == -1 { // 如果raft未拥有持久化状态记录则无需生成快照
 		return
 	}
-	if kv.persister.RaftStateSize() > kv.maxraftstate { // 如果raft状态大小大于最大状态限制时则开启快照生成 TODO ？不确定RaftStateSize()到底返回的是什么信息
+	if kv.persister.RaftStateSize() > kv.maxraftstate { // TODO 如果raft状态大小大于最大状态限制时则开启快照生成 ？不确定RaftStateSize()到底返回的是什么信息
 		kv.rf.Snapshot(index, kv.encodeSnapshot(index)) // 将KVServer状态打包进raft的本次快照中
 	}
 }
@@ -227,7 +227,7 @@ func (kv *KVServer) encodeSnapshot(lastIncludedIndex int) []byte {
 func (kv *KVServer) decodeSnapshot(snapshot []byte) bool {
 	if len(snapshot) == 0 {
 		return true
-	} // 如果该kv提交数据不包含快照 TODO ？不理解为什么leader传来的snapshot为空要装载
+	} // TODO 如果该kv提交数据不包含快照  ？不理解为什么leader传来的snapshot为空要装载
 	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
 	// TODO ？不理解为什么leader传来的snapshot解码为空时要装载

@@ -297,6 +297,51 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 	return ok
 }
 
+func (rf *Raft) oneInstallSnapshot(server int, args InstallSnapshotArgs) {
+	//fmt.Printf("sendInstallSnapshot!\n")
+	reply := InstallSnapshotReply{}
+	ok := rf.sendInstallSnapshot(server, &args, &reply)
+	if !ok {
+		return
+	}
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.currentTerm != args.Term || rf.role != 2 {
+		return
+	}
+	//发现更大的term，本结点是旧leader
+	if reply.Term > rf.currentTerm {
+		rf.currentTerm = reply.Term
+		rf.votedFor = -1
+		rf.role = 0
+		rf.persist()
+		return
+	}
+	//follower拒绝snapshot证明其commitIndex>lastIncludedIndex，接收也可以使得其commitIndex>lastIncludedIndex
+	rf.matchIndex[server] = rf.lastIncludedIndex
+	rf.nextIndex[server] = rf.matchIndex[server] + 1
+	matchIndexSlice := make([]int, len(rf.peers)) // 将matchIndex复制取出进行排序，取中位数即为commitIndex应该更新到的 值
+	for index, matchIndex := range rf.matchIndex {
+		matchIndexSlice[index] = matchIndex
+	}
+	sort.Slice(matchIndexSlice, func(i, j int) bool {
+		return matchIndexSlice[i] < matchIndexSlice[j]
+	})
+	//fmt.Printf("matchIndexSlice: %v, newcommitIndex: %v, lastLogIndex: %v\n", mr.Any2String(matchIndexSlice), matchIndexSlice[rf.nPeers/2], rf.lastLogIndex())
+	newCommitIndex := matchIndexSlice[len(rf.peers)/2]
+	//不能提交不属于当前term的日志
+	//DPrintf("id[%d] role[%v] snapshot commitIndex %v update to newcommitIndex %v, lastSnapshotIndex %v,  command: %v, matchIndex: %v\n", rf.me, rf.role, rf.commitIndex, newCommitIndex, rf.lastIncludeIndex, 0, mr.Any2String(rf.matchIndex))
+	if newCommitIndex > rf.commitIndex && rf.log[newCommitIndex-rf.lastIncludedIndex].Term == rf.currentTerm {
+		//如果commitIndex比自己实际的日志长度还大，这时需要减小
+		lastIndex, _ := rf.lastLog()
+		if newCommitIndex > lastIndex {
+			rf.commitIndex = lastIndex
+		} else {
+			rf.commitIndex = newCommitIndex
+		}
+	}
+}
+
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
@@ -607,7 +652,7 @@ func (rf *Raft) sendAE2All() {
 			server := i
 			rf.mu.Lock()
 			//fmt.Printf("Server%d 向Server%d sendAppendEntries!\n", rf.me, server)
-			term := rf.currentTerm
+			term := rf.currentTerm // TODO 应该把心跳参数移到循环外面，保证每个follower收到一致的
 			commit := rf.commitIndex
 			args := InstallSnapshotArgs{
 				Term:              rf.currentTerm,
@@ -618,50 +663,7 @@ func (rf *Raft) sendAE2All() {
 			}
 
 			if rf.nextIndex[i] <= rf.lastIncludedIndex {
-				go func(server int, args *InstallSnapshotArgs) {
-					//fmt.Printf("sendInstallSnapshot!\n")
-					reply := InstallSnapshotReply{}
-					ok := rf.sendInstallSnapshot(server, args, &reply)
-					if !ok {
-						return
-					}
-					rf.mu.Lock()
-					defer rf.mu.Unlock()
-					if rf.currentTerm != args.Term || rf.role != 2 {
-						return
-					}
-					//发现更大的term，本结点是旧leader
-					if reply.Term > rf.currentTerm {
-						rf.currentTerm = reply.Term
-						rf.votedFor = -1
-						rf.role = 0
-						rf.persist()
-						return
-					}
-					//follower拒绝snapshot证明其commitIndex>lastIncludedIndex，接收也可以使得其commitIndex>lastIncludedIndex
-					rf.matchIndex[server] = rf.lastIncludedIndex
-					rf.nextIndex[server] = rf.matchIndex[server] + 1
-					matchIndexSlice := make([]int, len(rf.peers))
-					for index, matchIndex := range rf.matchIndex {
-						matchIndexSlice[index] = matchIndex
-					}
-					sort.Slice(matchIndexSlice, func(i, j int) bool {
-						return matchIndexSlice[i] < matchIndexSlice[j]
-					})
-					//fmt.Printf("matchIndexSlice: %v, newcommitIndex: %v, lastLogIndex: %v\n", mr.Any2String(matchIndexSlice), matchIndexSlice[rf.nPeers/2], rf.lastLogIndex())
-					newCommitIndex := matchIndexSlice[len(rf.peers)/2]
-					//不能提交不属于当前term的日志
-					//DPrintf("id[%d] role[%v] snapshot commitIndex %v update to newcommitIndex %v, lastSnapshotIndex %v,  command: %v, matchIndex: %v\n", rf.me, rf.role, rf.commitIndex, newCommitIndex, rf.lastIncludeIndex, 0, mr.Any2String(rf.matchIndex))
-					if newCommitIndex > rf.commitIndex && rf.log[newCommitIndex-rf.lastIncludedIndex].Term == rf.currentTerm {
-						//如果commitIndex比自己实际的日志长度还大，这时需要减小
-						lastIndex, _ := rf.lastLog()
-						if newCommitIndex > lastIndex {
-							rf.commitIndex = lastIndex
-						} else {
-							rf.commitIndex = newCommitIndex
-						}
-					}
-				}(i, &args)
+				go rf.oneInstallSnapshot(i, args)
 			} else {
 				//fmt.Printf("Server%d(%s %d) 向Server%d发送AppendEntries\n", rf.me, roleMap(rf.role), rf.currentTerm, server)
 				go rf.oneAppendEntries(server, term, commit)
